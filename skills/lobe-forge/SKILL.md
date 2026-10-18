@@ -182,17 +182,20 @@ External lobe: the home is not versioned — rerun `create` with the same name, 
 ## Upgrade an existing lobe
 
 Lobes keep the tooling they were created with. After lobe-forge changes, re-render a lobe's
-generated files (`wiki_tool.py`, `wikictl`, `LOBE.md`, `skills/<name>-*/SKILL.md`):
+generated files (`wiki_tool.py`, `wikictl`, `LOBE.md`, `skills/<name>-{add-raw,ingest,ask,lint}/SKILL.md`;
+other skills in `skills/` are never touched):
 
 ```bash
 FORGE="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/scripts/forge.py"
 python3 "$FORGE" upgrade --repo "<lobe repo or home>"            # dry run
 python3 "$FORGE" upgrade --repo "<lobe repo or home>" --apply    # on a yes
+python3 "$FORGE" upgrade --all                                   # every installed lobe, dry run
 ```
 
 Show the dry run and ask before `--apply`. In place it refuses while those files have
 uncommitted changes; afterwards show `git -C "<path>" diff --stat` and commit with the paths it
-printed. An external home gets `*.bak` copies. If it reports new skills, run `install`.
+printed. An external home gets `*.bak` copies. A new forge skill is linked into every Claude dir
+that already has the lobe; if the lobe is installed nowhere it says so — then run `install`.
 
 ## Uninstall or move a lobe
 

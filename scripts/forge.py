@@ -7,7 +7,8 @@ Commands:
   scan      Find existing LLM wikis (llmwiki/ or wiki/ with an index.md) under a directory
   create    Create a lobe, or adopt an existing wiki, and symlink its skills into Claude
   install   Symlink an existing lobe's skills into Claude installations (e.g. a fresh clone)
-  upgrade   Re-render an existing lobe's generated files from the current templates
+  upgrade   Re-render a lobe's generated files from the current templates (--all: every installed
+            lobe) and link forge skills missing from Claude dirs that already have the lobe
   uninstall Remove a lobe's skill links (and, with --purge, an external home's generated files)
 
 Two modes for create:
@@ -365,28 +366,58 @@ def cmd_install(args) -> int:
     return link_skills(lobe, skills, [Path(t) for t in args.target])
 
 
-def cmd_upgrade(args) -> int:
-    lobe = Path(args.repo).expanduser().resolve()
+def links_to(lobe: Path, target: Path) -> list[Path]:
+    """Skill links in a Claude config dir that point into this lobe's skills/."""
+    skills = (lobe / "skills").resolve()
+    return [l for l in sorted((target / "skills").glob("*"))
+            if l.is_symlink() and Path(os.path.realpath(l)).parent == skills]
+
+
+def installed_lobes() -> list[Path]:
+    """Lobes with a skill linked into any Claude config dir, found by walking up from each link."""
+    found = set()
+    for t in candidate_targets():
+        for link in (t / "skills").glob("*"):
+            if not link.is_symlink():
+                continue
+            # lobe/skills/<s>, or lobe/plugins/<p>/skills/<s> when lobe/skills is a symlink there
+            for up in list(Path(os.path.realpath(link)).parents)[1:4]:
+                if not isinstance(lobe_settings(up), str):
+                    found.add(up)
+                    break
+    return sorted(found)
+
+
+def upgrade_lobe(lobe: Path, apply: bool, origin: str | None = None) -> int:
     settings = lobe_settings(lobe)
     if isinstance(settings, str):
         return fail(settings)
-    if args.origin:
-        settings = (*settings[:5], " ".join(args.origin.split()))
+    if origin:
+        settings = (*settings[:5], " ".join(origin.split()))
     name, _, _, _, external, _ = settings
     files = generated_files(*settings)
     stale = [rel for rel, (text, _) in files.items()
              if not (lobe / rel).is_file() or (lobe / rel).read_text() != text]
+    # forge's own skills missing from a Claude dir that already has this lobe installed
+    targets = [t for t in candidate_targets() if links_to(lobe, t)]
+    unlinked = {t: missing for t in targets
+                if (missing := [f"{name}-{k}" for k in KINDS
+                                if not (t / "skills" / f"{name}-{k}").exists()
+                                and not (t / "skills" / f"{name}-{k}").is_symlink()])}
     say(f"Lobe '{name}' ({'external home' if external else 'in place'}) at {lobe}")
-    if not stale:
+    if not stale and not unlinked:
         say("Up to date with this lobe-forge's templates.")
         return 0
     for rel in stale:
         say(f"  {'update' if (lobe / rel).exists() else 'add   '}  {rel}")
-    if not args.apply:
+    for t, missing in unlinked.items():
+        for skill in missing:
+            say(f"  link    {t / 'skills' / skill}")
+    if not apply:
         say("\nDry run — rerun with --apply to write. Wiki pages and sources are never touched.")
         return 0
 
-    if not external:
+    if stale and not external:
         # the previous version must be in git, so an overwritten local edit can be recovered
         dirty = git(lobe, "status", "--porcelain", "--", *stale)
         if dirty:
@@ -401,15 +432,34 @@ def cmd_upgrade(args) -> int:
         path.write_text(text)
         if mode:
             path.chmod(mode)
-    say(f"\nUpgraded {len(stale)} file(s).")
-    if external:
-        say("Previous versions saved next to them as *.bak.")
-    else:
-        say(f'Review and commit: git -C "{lobe}" diff --stat && git -C "{lobe}" add {" ".join(stale)} '
-            f'&& git -C "{lobe}" commit -m "lobe: upgrade {name} tooling"')
-    if new_skills:
+    if stale:
+        say(f"\nUpgraded {len(stale)} file(s).")
+        if external:
+            say("Previous versions saved next to them as *.bak.")
+        else:
+            say(f'Review and commit: git -C "{lobe}" diff --stat && git -C "{lobe}" add {" ".join(stale)} '
+                f'&& git -C "{lobe}" commit -m "lobe: upgrade {name} tooling"')
+    if new_skills and not targets:
         say(f"New skills added — link them with: forge.py install --repo {lobe} --target <claude dir>")
-    return 0
+    errors = 0
+    for t, missing in unlinked.items():
+        errors |= link_skills(lobe, missing, [t])
+    return errors
+
+
+def cmd_upgrade(args) -> int:
+    if not args.all:
+        return upgrade_lobe(Path(args.repo).expanduser().resolve(), args.apply, args.origin)
+    if args.origin:
+        return fail("--origin is per lobe — use it with --repo, not --all")
+    lobes = installed_lobes()
+    if not lobes:
+        say("No lobes installed in any Claude config dir.")
+    errors = 0
+    for lobe in lobes:
+        errors |= upgrade_lobe(lobe, args.apply)
+        say("")
+    return errors
 
 
 def cmd_uninstall(args) -> int:
@@ -431,15 +481,13 @@ def cmd_uninstall(args) -> int:
             return fail(f"{lobe} holds files forge did not generate — nothing removed:\n"
                         + "\n".join(f"  {p.relative_to(lobe)}" for p in sorted(extra)))
 
-    skills = (lobe / "skills").resolve()
     targets = [Path(t).expanduser() for t in args.target] or candidate_targets()
     removed = 0
     for t in targets:
-        for link in sorted((t / "skills").glob("*")):
-            if link.is_symlink() and Path(os.path.realpath(link)).parent == skills:
-                link.unlink()
-                say(f"  unlinked {link}")
-                removed += 1
+        for link in links_to(lobe, t):
+            link.unlink()
+            say(f"  unlinked {link}")
+            removed += 1
     say(f"Removed {removed} skill link(s) for lobe '{name}'.")
 
     if args.purge:
@@ -477,7 +525,9 @@ def main() -> None:
     i.add_argument("--target", action="append", required=True)
 
     u = sub.add_parser("upgrade", help="Re-render a lobe's generated files from the current templates")
-    u.add_argument("--repo", required=True, help="Lobe repo (in place) or lobe home (external)")
+    which = u.add_mutually_exclusive_group(required=True)
+    which.add_argument("--repo", help="Lobe repo (in place) or lobe home (external)")
+    which.add_argument("--all", action="store_true", help="Every lobe with skills linked into a Claude config dir")
     u.add_argument("--apply", action="store_true", help="Write the files (default: dry run)")
     u.add_argument("--origin", help="Set where the wiki content came from (written to LOBE.md)")
 

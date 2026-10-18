@@ -73,12 +73,17 @@ python3 scripts/forge.py install --repo <lobe-repo> --target ~/.claude
 
 `create` never overwrites, so existing lobes keep the tooling they were made with. After
 updating lobe-forge, re-render a lobe's generated files (`wiki_tool.py`, `wikictl`, `LOBE.md`,
-`skills/<name>-*/SKILL.md`) from the current templates:
+the four `skills/<name>-{add-raw,ingest,ask,lint}/SKILL.md`) from the current templates:
 
 ```bash
 python3 scripts/forge.py upgrade --repo <lobe-repo-or-home>           # dry run: what would change
 python3 scripts/forge.py upgrade --repo <lobe-repo-or-home> --apply
+python3 scripts/forge.py upgrade --all [--apply]                       # every installed lobe
 ```
+
+`--all` finds lobes from the skill links in your Claude config dirs. Other skills in a lobe's
+`skills/` (your own, not forge's) are never touched. A forge skill the lobe lacks in a Claude dir
+that already has the lobe installed (a new skill kind) is linked there too.
 
 Name, purpose, folders and origin are read back from the lobe itself. Wiki pages and sources are
 never touched. In place, the files must be committed first so git holds the old version; an

@@ -248,6 +248,36 @@ with tempfile.TemporaryDirectory() as d:
     code, out = run("scan", str(own), home=d)
     assert "tracked=yes  raw_authors=1" in out, out
 
+    # upgrade --all: finds lobes from their links (also via a skills/ symlink, as some adopted repos have), touches
+    # only forge's own skills, and links forge skills missing from a Claude dir that has the lobe
+    assert run("install", "--repo", str(own), "--target", str(cfg), home=d)[0] == 0
+    (cfg / "skills" / "own-lint").unlink()
+    (own / "skills" / "own-custom").mkdir()
+    (own / "skills" / "own-custom" / "SKILL.md").write_text("mine")
+    ask.write_text("# old\n")
+    commit(own)
+    kdb = git_repo(d / "src3" / "kdb", {"wiki/index.md": "# I\n"})
+    assert run("create", "--name", "kdb", "--purpose", "x", "--repo", str(kdb))[0] == 0
+    (kdb / "plugins" / "k").mkdir(parents=True)
+    (kdb / "skills").rename(kdb / "plugins" / "k" / "skills")
+    (kdb / "skills").symlink_to("plugins/k/skills")
+    (kdb / "skills" / "kdb-build").mkdir()
+    (kdb / "skills" / "kdb-build" / "SKILL.md").write_text("custom")
+    assert run("install", "--repo", str(kdb), "--target", str(cfg), home=d)[0] == 0
+
+    code, out = run("upgrade", "--all", home=d)  # dry run
+    assert code == 0 and f"Lobe 'kdb' (in place) at {kdb.resolve()}\nUp to date" in out, out
+    assert "update  skills/own-ask/SKILL.md" in out and f"link    {cfg}/skills/own-lint" in out, out
+    assert not (cfg / "skills" / "own-lint").exists() and ask.read_text() == "# old\n"
+    assert run("upgrade", "--all", "--origin", "x", home=d)[0] == 1
+    code, out = run("upgrade", "--all", "--apply", home=d)
+    assert code == 0 and "Upgraded 1 file(s)" in out and (cfg / "skills" / "own-lint").is_symlink(), out
+    assert ask.read_text() == fresh["skills/own-ask/SKILL.md"]
+    assert (own / "skills" / "own-custom" / "SKILL.md").read_text() == "mine"
+    assert (kdb / "skills" / "kdb-build" / "SKILL.md").read_text() == "custom"
+    commit(own)
+    assert "Up to date" in run("upgrade", "--all", home=d)[1]
+
     # uninstall: links only, everywhere they point into this lobe; --purge only for external homes
     code, out = run("uninstall", "--repo", str(own), "--purge", "--target", str(claude))
     assert code == 1 and "external homes only" in out and (claude / "skills" / "own-ask").is_symlink(), out

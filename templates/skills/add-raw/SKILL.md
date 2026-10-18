@@ -26,7 +26,7 @@ Add a source document to the **{{NAME}}** lobe. Purpose: {{PURPOSE}}
 variables do not persist between Bash calls — start every Bash command with:
 
 ```bash
-W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 ```
 
 > **Rule**: `{{RAW}}/` is append-only. Never modify or delete a file in it.
@@ -63,7 +63,7 @@ captured: <YYYY-MM-DD>
 ### Step 3 — Commit
 
 ```bash
-W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 git -C "$REPO" add "{{RAW}}/<file>" && git -C "$REPO" commit -q -m "raw: add <file>"
 ```
 

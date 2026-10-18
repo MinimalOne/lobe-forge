@@ -27,7 +27,7 @@ Ingest a raw source into the **{{NAME}}** lobe. Purpose: {{PURPOSE}}
 variables do not persist between Bash calls — start every Bash command with:
 
 ```bash
-W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 ```
 
 Page format and rules: `$LOBE/LOBE.md` (read it once per session if unsure).
@@ -59,7 +59,7 @@ Read it in full. For images, describe what is shown and transcribe any text.
    Note each candidate's slug and aliases (nicknames, abbreviations, other spellings).
 2. **Search once per candidate**, names and aliases as alternation:
    ```bash
-   W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+   W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
    "$W" search "grandma|oma|maria" --limit 5
    ```
 3. **Same, not related**: a candidate maps to an existing page only if both are the **same**
@@ -94,7 +94,7 @@ close to its wording; no filler; keep claims scoped (who said it, when, where); 
 - Summary page ↔ each concept page; concept pages → related pages.
 - Pages that mention a new concept without linking it, found by grep, not by reading:
   ```bash
-  W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+  W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
   cd "$WIKI" && grep -liE 'name|alias' *.md | grep -v -e '^index.md$' -e '^log.md$' -e '^<page>.md$' \
     | xargs grep -L '\[\[<page>\]\]'
   ```
@@ -103,7 +103,7 @@ close to its wording; no filler; keep claims scoped (who said it, when, where); 
 ### Step 6 — Index, log, lint, commit
 
 ```bash
-W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 "$W" sections
 "$W" index-add --section "<Section>" --page <page> --description "<≤25 words>"   # per new page
 cat >> "$WIKI/log.md" <<'LOG'
@@ -121,7 +121,7 @@ No fitting section → ask the user; add it as a new `## <Section>` heading in `
 Fix any hard lint error (broken link, frontmatter, missing source) before committing.
 
 ```bash
-W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 git -C "$REPO" add <each page created or edited> {{WIKI}}/index.md {{WIKI}}/log.md && \
   git -C "$REPO" commit -q -m "wiki: ingest <source-slug> — <N> created, <M> updated"
 ```

@@ -25,7 +25,7 @@ Generate a lobe: a wiki repo plus four skills named after it. Example: name `per
 variables do not persist between Bash calls — start every Bash command with:
 
 ```bash
-FORGE="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/scripts/forge.py"
+FORGE="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/scripts/forge.py"
 ```
 
 All file work goes through `forge.py`; it never overwrites or deletes anything.
@@ -51,7 +51,7 @@ Ask: **create a new repo** or **use an existing one** (local path, or a GitHub U
 For an existing path, always scan it first — it may be a repo, or a folder of many repos:
 
 ```bash
-FORGE="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/scripts/forge.py"
+FORGE="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/scripts/forge.py"
 python3 "$FORGE" scan "<path>"
 ```
 
@@ -80,14 +80,14 @@ gh api user -q .login          # your GitHub login
   itself is not touched, and the generated skills ask before every commit and never push.
 
 Adopting never rewrites existing pages. Legacy pages keep working; `<name>-lint` offers to
-convert them.
+convert them with `wikictl convert-legacy` (dry run first, `--apply` on a yes).
 
 ### Step 3 — Where to install
 
 List the Claude installations on this machine:
 
 ```bash
-FORGE="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/scripts/forge.py"
+FORGE="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/scripts/forge.py"
 python3 "$FORGE" targets
 ```
 
@@ -97,7 +97,7 @@ Ask which to install into (`AskUserQuestion`, multiSelect; each line is one opti
 ### Step 4 — Generate
 
 ```bash
-FORGE="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/scripts/forge.py"
+FORGE="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/scripts/forge.py"
 python3 "$FORGE" create --name "<name>" --purpose "<purpose>" --repo "<path>" \
   --target ~/.claude --target ~/.claude-personal
 # adopting: add  --wiki-dir llmwiki --raw-dir docs   (from scan)
@@ -152,7 +152,7 @@ Restart Claude Code to load the new skills, then: /personal-add-raw <url or file
 In-place lobe: clone the repo, then link its skills (no files are generated):
 
 ```bash
-FORGE="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/scripts/forge.py"
+FORGE="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/scripts/forge.py"
 python3 "$FORGE" install --repo "<path>" --target ~/.claude
 ```
 

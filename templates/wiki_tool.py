@@ -10,6 +10,7 @@ Commands:
   links        Show a page's outgoing links (with summaries) and inbound links
   sections     List index.md section headings
   index-add    Insert one row into an index.md section without reading the whole index
+  convert-legacy  Move legacy bold Summary/Sources/Last updated lines into frontmatter
 
 Paths default to this repo's layout (wiki/, raw/). Override with WIKI_ROOT, WIKI_DIR,
 WIKI_RAW_DIR and WIKI_CATALOG to point it at another layout.
@@ -98,6 +99,31 @@ def parse_frontmatter(text: str) -> tuple[dict | None, str]:
     return fm, body
 
 
+def _split_top(s: str) -> list[str]:
+    """Split on ';' outside () and [] — legacy Sources lines use ';' between kinds of evidence."""
+    out, depth, cur = [], 0, ""
+    for ch in s:
+        depth += (ch in "([") - (ch in ")]")
+        if ch == ";" and depth <= 0:
+            out.append(cur.strip())
+            cur = ""
+        else:
+            cur += ch
+    return [p for p in out + [cur.strip()] if p]
+
+
+def legacy_sources(line: str) -> tuple[list[str], list[str]]:
+    """(sources, provenance) from a legacy Sources line: files that exist under the raw dir are
+    sources; every ';' part except a bare source path is provenance, text unchanged."""
+    rel = RAW.relative_to(REPO).as_posix()
+    sources: list[str] = []
+    for p in re.findall(re.escape(rel) + r"/[\w./-]+\.\w+", line):
+        if (REPO / p).is_file() and p not in sources:
+            sources.append(p)
+    provenance = [p for p in _split_top(line) if p.strip("`") not in sources]
+    return sources, provenance
+
+
 def parse_legacy_fields(text: str) -> dict:
     """Extract metadata from legacy body fields (no frontmatter)."""
     out: dict = {}
@@ -109,9 +135,7 @@ def parse_legacy_fields(text: str) -> dict:
         out["summary"] = m.group(1).strip()
     m = re.search(r"\*\*Sources?\*\*:\s*(.+)", text)
     if m:
-        raw = m.group(1).strip()
-        parts = [p.strip().strip("`") for p in re.split(r",\s*", raw) if p.strip()]
-        out["sources"] = parts
+        out["sources"], out["provenance"] = legacy_sources(m.group(1).strip())
     m = re.search(r"\*\*Last updated\*\*:\s*(\S+)", text)
     if m:
         out["last_updated"] = m.group(1).strip()
@@ -169,7 +193,7 @@ def parse_page(path: Path, text: str | None = None) -> dict:
         "summary": fields.get("summary", ""),
         "sources": sources,
         "source_count": len(sources),
-        "provenance": [],
+        "provenance": fields.get("provenance", []),
         "aliases": [],
         "last_updated": fields.get("last_updated", ""),
         "wiki_links": wiki_links_in(text),
@@ -303,6 +327,7 @@ def cmd_lint(args) -> int:
                         print(f"    - {pg}")
                 else:
                     print(f"    (run with --show-legacy to list all {leg_count})")
+                print("    (convert: convert-legacy to preview, convert-legacy --apply to write)")
             for page, msg in items:
                 print(f"  {n}. {page} — {msg}")
                 n += 1
@@ -479,6 +504,72 @@ def cmd_index_add(args) -> int:
     return 0
 
 
+# ── convert-legacy ────────────────────────────────────────────────────────────
+
+LEGACY_META = re.compile(r"^\*\*(Summary|Sources?|Last updated)\*\*:\s*(.*)$")
+
+
+def _q(s: str) -> str:
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def convert_legacy(text: str) -> tuple[str | None, str]:
+    """Return (new_text, info) or (None, reason). Only the title/metadata header changes:
+    the bold lines and the '---' rule after them become frontmatter; the body is kept as is."""
+    if text.startswith("---\n"):
+        return None, "already has frontmatter"
+    lines = text.split("\n")
+    t = next((i for i, l in enumerate(lines) if l.startswith("# ")), None)
+    if t is None:
+        return None, "no '# ' title"
+    meta, end = {}, t + 1
+    while end < len(lines):
+        m = LEGACY_META.match(lines[end])
+        if m:
+            meta["Sources" if m.group(1).startswith("Source") else m.group(1)] = m.group(2).strip()
+        elif lines[end].strip() == "---":
+            end += 1
+            break
+        elif lines[end].strip():
+            break
+        end += 1
+    missing = sorted({"Summary", "Sources", "Last updated"} - meta.keys())
+    if missing:
+        return None, f"header lacks {', '.join(missing)}"
+    sources, provenance = legacy_sources(meta["Sources"])
+    fm = ["---", f"title: {_q(lines[t][2:].strip())}", f"summary: {_q(meta['Summary'])}"]
+    fm += (["sources:"] + [f"  - {s}" for s in sources]) if sources else ["sources: []"]
+    fm += [f"source_count: {len(sources)}"]
+    fm += (["provenance:"] + [f"  - {_q(p)}" for p in provenance]) if provenance else []
+    fm += [f"last_updated: {meta['Last updated'].split()[0]}", "---", ""]
+    body = lines[end:]
+    while body and not body[0].strip():
+        body.pop(0)
+    return "\n".join(fm + [lines[t], ""] + body), f"{len(sources)} source(s), {len(provenance)} provenance"
+
+
+def cmd_convert_legacy(args) -> int:
+    done = skipped = 0
+    for p in sorted(WIKI.glob("*.md")):
+        if p.name in SKIP:
+            continue
+        new, info = convert_legacy(p.read_text())
+        if new is None:
+            if info != "already has frontmatter":
+                print(f"  skip {p.name}: {info}")
+                skipped += 1
+            continue
+        print(f"  {'wrote' if args.apply else 'would convert'} {p.name}: {info}")
+        if args.apply:
+            p.write_text(new)
+        done += 1
+    verb = "Converted" if args.apply else "Dry run — would convert"
+    print(f"\n{verb} {done} page(s); {skipped} skipped (fix by hand).")
+    if done and not args.apply:
+        print("Rerun with --apply to write.")
+    return 1 if skipped else 0
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -518,6 +609,9 @@ def main():
     idx_p.add_argument("--page", required=True)
     idx_p.add_argument("--description", required=True)
 
+    conv_p = sub.add_parser("convert-legacy", help="Convert legacy pages to frontmatter (dry run unless --apply)")
+    conv_p.add_argument("--apply", action="store_true", help="Write the converted pages")
+
     args = p.parse_args()
     if args.command == "build":
         sys.exit(cmd_build(args))
@@ -527,7 +621,7 @@ def main():
         sys.exit(cmd_source_scan(args))
     else:
         sys.exit({"search": cmd_search, "links": cmd_links, "sections": cmd_sections,
-                  "index-add": cmd_index_add}[args.command](args))
+                  "index-add": cmd_index_add, "convert-legacy": cmd_convert_legacy}[args.command](args))
 
 
 if __name__ == "__main__":

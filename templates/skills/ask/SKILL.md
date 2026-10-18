@@ -25,7 +25,7 @@ Answer questions using the **{{NAME}}** lobe. Purpose: {{PURPOSE}}
 variables do not persist between Bash calls — start every Bash command with:
 
 ```bash
-W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 ```
 
 | Command | Purpose |
@@ -47,7 +47,7 @@ Split the question into 2–4 key concepts. Pass **one term per concept**, with 
 nicknames and spelling variants as regex alternation:
 
 ```bash
-W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 "$W" search "school|kindergarten|kita" "fees?|cost|price"
 ```
 
@@ -83,7 +83,7 @@ If the answer combines several pages or will recur, offer to save it as
 `provenance`). Then, without reading the index or log:
 
 ```bash
-W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 "$W" index-add --section "<Section>" --page <name> --description "<≤25 words>"
 printf '\n## %s — Ask: %s\n\n- Created: %s\n' "$(date +%F)" "<question, short>" "<name>" >> "$WIKI/log.md"
 git -C "$REPO" add {{WIKI}}/<name>.md {{WIKI}}/index.md {{WIKI}}/log.md && git -C "$REPO" commit -q -m "wiki: save answer <name>"

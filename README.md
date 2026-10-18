@@ -49,7 +49,7 @@ python3 scripts/forge.py scan ~/code      # read-only report
 ```
 raw/            sources, append-only
 wiki/           pages + index.md + log.md
-wiki_tool.py    search, links, sections, index-add, lint, build (stdlib Python)
+wiki_tool.py    search, links, sections, index-add, lint, build, convert-legacy (stdlib Python)
 wikictl         wrapper that points wiki_tool.py at this lobe's folders
 LOBE.md         page format and rules
 skills/         <name>-add-raw, -ingest, -ask, -lint

@@ -1,4 +1,5 @@
 """Smoke tests for forge.py: create, adopt (in place and external), scan, install. Run: python3 test_forge.py"""
+import json
 import os
 import subprocess
 import sys
@@ -49,7 +50,9 @@ with tempfile.TemporaryDirectory() as d:
 
     # the header every generated skill runs resolves the repo through the install symlink
     base = claude / "skills" / "personal-ask"
-    r = sh(f'SKILL_BASE_DIR="{base}"; W="$(cd -P "${{SKILL_BASE_DIR}}/../.." && pwd)/wikictl"; '
+    # a shell whose cd is aliased (zoxide, autoenv) must not break the header
+    r = sh(f'cd() {{ echo "zoxide: no match found" >&2; return 1; }}; '
+           f'SKILL_BASE_DIR="{base}"; W="$(builtin cd -P "${{SKILL_BASE_DIR}}/../.." && pwd)/wikictl"; '
            f'eval "$("$W" paths)"; echo "$REPO|$WIKI|$RAW"; "$W" sections; "$W" lint --strict >/dev/null; echo rc=$?')
     rp = repo.resolve()
     assert r.stdout.splitlines() == [f"{rp}|{rp}/wiki|{rp}/raw", "General", "rc=0"], r.stdout + r.stderr
@@ -89,6 +92,40 @@ with tempfile.TemporaryDirectory() as d:
     assert "[[old-page]]" in r.stdout, r.stdout + r.stderr
     assert "commit wiki changes" in (own / "skills" / "own-ingest" / "SKILL.md").read_text()
 
+    # legacy Sources lines: commas inside one item, PR links, bare filenames that are not raw files
+    (own / "docs" / "runbook.md").write_text("src")
+    pr = "[#1](https://x/pull/1), [#2](https://x/pull/2)"
+    mixed = (f"# Mixed; Page\n\n**Summary**: Uses \"quotes\" and a \\ backslash.\n\n"
+             f"**Sources**: `data.tf`, `aurora.tf`; PRs {pr}; `docs/runbook.md`; `docs/gone.md` (deleted); "
+             f"Slack (C1; thread 2)\n\n**Last updated**: 2026-10-12\n\n---\n\n## Body\n\nKeep [[old-page]] text.\n")
+    nohead = "# No Header\n\nJust text.\n"
+    (own / "llmwiki" / "mixed.md").write_text(mixed)
+    (own / "llmwiki" / "nohead.md").write_text(nohead)
+    lint = sh(f'"{own}/wikictl" build >/dev/null && cat "{own}/catalog.jsonl"').stdout
+    entry = next(json.loads(l) for l in lint.splitlines() if '"llmwiki/mixed.md"' in l)
+    assert entry["sources"] == ["docs/runbook.md"], entry  # not data.tf / PR fragments
+    assert entry["provenance"] == ["`data.tf`, `aurora.tf`", f"PRs {pr}", "`docs/gone.md` (deleted)",
+                                   "Slack (C1; thread 2)"], entry["provenance"]
+
+    r = sh(f'"{own}/wikictl" convert-legacy')  # dry run writes nothing
+    assert r.returncode == 1 and "would convert mixed.md" in r.stdout and "skip nohead.md" in r.stdout, r.stdout
+    assert (own / "llmwiki" / "mixed.md").read_text() == mixed
+
+    r = sh(f'"{own}/wikictl" convert-legacy --apply')
+    assert "Converted 2 page(s); 1 skipped" in r.stdout, r.stdout
+    assert (own / "llmwiki" / "nohead.md").read_text() == nohead
+    new = (own / "llmwiki" / "mixed.md").read_text()
+    assert new.startswith('---\ntitle: "Mixed; Page"\nsummary: "Uses \\"quotes\\" and a \\\\ backslash."\n'), new
+    assert new.endswith("---\n\n# Mixed; Page\n\n## Body\n\nKeep [[old-page]] text.\n"), new
+    assert (own / "llmwiki" / "old-page.md").read_text().startswith("---\ntitle: \"Old Page\"\n")
+    (own / "llmwiki" / "nohead.md").unlink()
+    r = sh(f'"{own}/wikictl" build && "{own}/wikictl" lint --strict && "{own}/wikictl" search quotes')
+    assert r.returncode == 0 and "2 with frontmatter, 0 legacy" in r.stdout and "[[mixed]]" in r.stdout, r.stdout
+    entry = next(json.loads(l) for l in (own / "catalog.jsonl").read_text().splitlines() if "mixed.md" in l)
+    assert entry["summary"] == 'Uses "quotes" and a \\ backslash.' and entry["source_count"] == 1, entry
+    r = sh(f'"{own}/wikictl" convert-legacy --apply')  # idempotent
+    assert r.returncode == 0 and "Converted 0 page(s)" in r.stdout, r.stdout
+
     # adopt external: the work repo is untouched, lobe home links to it
     home = d / "lobes" / "_adopted" / "work-wiki"
     code, out = run("create", "--name", "work-wiki", "--purpose", "Team repo.", "--repo", str(work),
@@ -99,7 +136,7 @@ with tempfile.TemporaryDirectory() as d:
     assert (home / "repo").resolve() == work.resolve()
     assert "never push unless asked" in (home / "skills" / "work-wiki-ingest" / "SKILL.md").read_text()
     base = claude / "skills" / "work-wiki-lint"
-    r = sh(f'SKILL_BASE_DIR="{base}"; W="$(cd -P "${{SKILL_BASE_DIR}}/../.." && pwd)/wikictl"; '
+    r = sh(f'SKILL_BASE_DIR="{base}"; W="$(builtin cd -P "${{SKILL_BASE_DIR}}/../.." && pwd)/wikictl"; '
            f'eval "$("$W" paths)"; echo "$REPO"; "$W" build >/dev/null; ls "$LOBE"/catalog.jsonl')
     assert r.stdout.splitlines()[0] == str(work.resolve()) and r.returncode == 0, r.stdout + r.stderr
     assert subprocess.run(["git", "-C", str(work), "status", "--porcelain"], capture_output=True, text=True).stdout == ""

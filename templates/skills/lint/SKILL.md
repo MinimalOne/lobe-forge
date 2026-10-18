@@ -25,7 +25,7 @@ Audit the **{{NAME}}** lobe. Purpose: {{PURPOSE}}
 variables do not persist between Bash calls — start every Bash command with:
 
 ```bash
-W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 ```
 
 **Token rule**: never read every page. Read only pages the script flags or the candidate
@@ -34,7 +34,7 @@ queries below select.
 ## Step 1 — Deterministic checks
 
 ```bash
-W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 "$W" lint
 ```
 
@@ -49,7 +49,7 @@ W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # 
 ## Step 2 — Reasoning checks on candidates
 
 ```bash
-W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 "$W" build >/dev/null && cd "$LOBE"   # catalog.jsonl lives in the lobe home
 # E candidates: last_updated older than 6 months
 python3 -c "import json,datetime as d;c=(d.date.today()-d.timedelta(days=183)).isoformat();[print(e['page'],e['last_updated']) for e in map(json.loads,open('catalog.jsonl')) if e['last_updated']<c]"
@@ -82,7 +82,21 @@ Total: N — fix G, C, H first, then B and D.
 
 ## Step 4 — Offer fixes
 
-Targeted `Edit`s only: recount `source_count`, move non-file sources to `provenance`, add
+**Legacy pages first** (G reports `Legacy pages (no frontmatter)`): never convert them by hand.
+Preview, show the user the summary, and write only on a yes:
+
+```bash
+W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+"$W" convert-legacy            # dry run: per page, how many sources and provenance items
+"$W" convert-legacy --apply    # writes; pages it skips are listed with the reason
+git -C "$REPO" diff --stat -- "$WIKI"
+```
+
+It moves the bold Summary/Sources/Last updated lines into frontmatter: files under `{{RAW}}/`
+become `sources`, everything else becomes `provenance`; the body is not touched. Fix skipped
+pages by hand, then append one line to `{{WIKI}}/log.md` with `cat >>`.
+
+Then targeted `Edit`s only: recount `source_count`, move non-file sources to `provenance`, add
 missing index rows with `index-add`, add links to orphans from a related page. After fixing,
 rerun `lint --strict`, then commit with explicit paths:
 `git -C "$REPO" add <files> && git -C "$REPO" commit -q -m "wiki: lint fixes — <summary>"`.

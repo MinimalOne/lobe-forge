@@ -55,7 +55,7 @@ Ask `/lobe-forge`:
 | You want to | Say |
 |---|---|
 | Turn existing `wiki/` or `llmwiki/` folders into lobes | `/lobe-forge adopt the wikis in ~/code` |
-| Use a lobe on another machine | `/lobe-forge install my lobe from ~/lobes/personal` |
+| Set up a lobe you cloned on another machine | `/lobe-forge install the lobe I cloned to ~/lobes/personal` |
 | Get new templates after updating the plugin | `/lobe-forge upgrade my lobes` |
 | Remove a lobe's skills | `/lobe-forge uninstall the personal lobe` |
 

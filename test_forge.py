@@ -47,6 +47,7 @@ with tempfile.TemporaryDirectory() as d:
         assert f"name: personal-{k}\n" in skill and "{{" not in skill, k
         link = claude / "skills" / f"personal-{k}"
         assert link.is_symlink() and link.resolve() == (repo / "skills" / f"personal-{k}").resolve()
+    assert "**Origin**: new\n" in (repo / "LOBE.md").read_text()
 
     # the header every generated skill runs resolves the repo through the install symlink
     base = claude / "skills" / "personal-ask"
@@ -74,6 +75,7 @@ with tempfile.TemporaryDirectory() as d:
              "llmwiki/log.md": "# Log\n", "llmwiki/old-page.md": LEGACY, "main.go": "package main\n"}
     own = git_repo(d / "src" / "own", files)
     work = git_repo(d / "src" / "work", files)
+    subprocess.run(["git", "-C", str(work), "remote", "add", "origin", "git@github.com:acme/work.git"], check=True)
 
     # guard: default --wiki-dir would create a second wiki beside llmwiki/
     code, out = run("create", "--name", "own", "--purpose", "x", "--repo", str(own))
@@ -91,6 +93,8 @@ with tempfile.TemporaryDirectory() as d:
     r = sh(f'"{own}/wikictl" search holiday')
     assert "[[old-page]]" in r.stdout, r.stdout + r.stderr
     assert "commit wiki changes" in (own / "skills" / "own-ingest" / "SKILL.md").read_text()
+    assert "**Origin**: local repo, no remote\n" in (own / "LOBE.md").read_text()
+    assert "H is not checked on legacy pages" in sh(f'"{own}/wikictl" lint').stdout
 
     # legacy Sources lines: commas inside one item, PR links, bare filenames that are not raw files
     (own / "docs" / "runbook.md").write_text("src")
@@ -126,6 +130,15 @@ with tempfile.TemporaryDirectory() as d:
     r = sh(f'"{own}/wikictl" convert-legacy --apply')  # idempotent
     assert r.returncode == 0 and "Converted 0 page(s)" in r.stdout, r.stdout
 
+    # every candidate query in the generated lint skill runs; a passed event date is flagged
+    (own / "llmwiki" / "cutover.md").write_text(
+        '---\ntitle: "Cutover"\nsummary: "Planned for 2026-01-15, review on 2999-01-01."\nsources: []\n'
+        'source_count: 0\nprovenance:\n  - "chat"\nlast_updated: 2026-01-10\n---\n\n# Cutover\n')
+    queries = [l for l in (own / "skills" / "own-lint" / "SKILL.md").read_text().splitlines() if l.startswith("python3 -c")]
+    r = sh(f'"{own}/wikictl" build >/dev/null && builtin cd "{own}" && ' + " && ".join(queries))
+    assert len(queries) == 3 and r.returncode == 0, r.stderr
+    assert "llmwiki/cutover.md 2026-01-10 event 2026-01-15" in r.stdout and "2999" not in r.stdout, r.stdout
+
     # adopt external: the work repo is untouched, lobe home links to it
     home = d / "lobes" / "_adopted" / "work-wiki"
     code, out = run("create", "--name", "work-wiki", "--purpose", "Team repo.", "--repo", str(work),
@@ -133,6 +146,7 @@ with tempfile.TemporaryDirectory() as d:
     assert code == 0, out
     status = subprocess.run(["git", "-C", str(work), "status", "--porcelain"], capture_output=True, text=True).stdout
     assert status == "", status
+    assert "**Origin**: github.com/acme/work\n" in (home / "LOBE.md").read_text()
     assert (home / "repo").resolve() == work.resolve()
     assert "never push unless asked" in (home / "skills" / "work-wiki-ingest" / "SKILL.md").read_text()
     base = claude / "skills" / "work-wiki-lint"
@@ -200,5 +214,56 @@ with tempfile.TemporaryDirectory() as d:
     for lobe, skill in [(repo, "personal-ingest"), (home, "work-wiki-ask")]:
         code, out = run("install", "--repo", str(lobe), "--target", str(d / "other"))
         assert code == 0 and (d / "other" / "skills" / skill).is_symlink(), out
+
+    # upgrade --origin records where moved content came from, and upgrade reads it back
+    code, out = run("upgrade", "--repo", str(own), "--apply", "--origin", "github.com/acme/team-wiki")
+    assert code == 0 and "**Origin**: github.com/acme/team-wiki\n" in (own / "LOBE.md").read_text(), out
+    commit(own)
+    assert "Up to date" in run("upgrade", "--repo", str(own))[1]
+
+    # scan: tracking state, shared raw folder, and other installed skills that serve the wiki
+    ign = git_repo(d / "src2" / "ign", {"docs/a.md": "x"})
+    (ign / "docs" / "b.md").write_text("y")
+    subprocess.run(["git", "-C", str(ign), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(ign), "-c", "user.email=b@b", "-c", "user.name=b", "commit", "-qm", "b"], check=True)
+    (ign / ".git" / "info" / "exclude").write_text("llmwiki/\n")
+    (ign / "llmwiki").mkdir()
+    (ign / "llmwiki" / "index.md").write_text("# Index\n")
+    cfg = d / ".claude"
+    (cfg / "settings.json").parent.mkdir(parents=True, exist_ok=True)
+    (cfg / "settings.json").write_text("{}")
+    for skill, text in {"old-wiki": "updates llmwiki/index.md", "near": "updates wiki/index.md",
+                        "gen-ask": "runs wikictl on llmwiki/index.md", "by-path": "reads ~/src2/ign/notes",
+                        "prefix": "reads ~/src2/ign-old/notes"}.items():
+        (cfg / "skills" / skill).mkdir(parents=True)
+        (cfg / "skills" / skill / "SKILL.md").write_text(text)
+    (d / "plug" / "skills" / "lobe-ask").mkdir(parents=True)
+    (d / "plug" / "skills" / "lobe-ask" / "SKILL.md").write_text("answers from llmwiki/index.md")
+    (cfg / "plugins").mkdir()
+    (cfg / "plugins" / "installed_plugins.json").write_text(
+        json.dumps({"version": 2, "plugins": {"lobe@mine": [{"installPath": str(d / "plug")}]}}))
+    code, out = run("scan", str(d / "src2"), home=d)
+    assert code == 0 and "tracked=ignored(.git/info/exclude:1:llmwiki/)  raw_authors=2" in out, out
+    assert "other_skills=.claude:by-path,.claude:lobe:lobe-ask,.claude:old-wiki\n" in out, out
+    code, out = run("scan", str(own), home=d)
+    assert "tracked=yes  raw_authors=1" in out, out
+
+    # uninstall: links only, everywhere they point into this lobe; --purge only for external homes
+    code, out = run("uninstall", "--repo", str(own), "--purge", "--target", str(claude))
+    assert code == 1 and "external homes only" in out and (claude / "skills" / "own-ask").is_symlink(), out
+    code, out = run("uninstall", "--repo", str(own), "--target", str(claude))
+    assert code == 0 and "Removed 4 skill link(s)" in out, out
+    assert not any((claude / "skills" / f"own-{k}").exists() for k in ["add-raw", "ingest", "ask", "lint"])
+    assert (claude / "skills" / "work-wiki-ask").is_symlink() and (own / "skills" / "own-ask" / "SKILL.md").is_file()
+
+    (home / "notes.txt").write_text("mine")
+    targets = ["--target", str(claude), "--target", str(d / "other")]
+    code, out = run("uninstall", "--repo", str(home), "--purge", *targets)
+    assert code == 1 and "notes.txt" in out and (claude / "skills" / "work-wiki-ask").is_symlink(), out
+    (home / "notes.txt").unlink()
+    code, out = run("uninstall", "--repo", str(home), "--purge", *targets)
+    assert code == 0 and "Removed 8 skill link(s)" in out and not home.exists(), out  # 4 skills x 2 installs
+    assert (work / "llmwiki" / "old-page.md").read_text() == LEGACY
+    assert subprocess.run(["git", "-C", str(work), "status", "--porcelain"], capture_output=True, text=True).stdout == ""
 
 print("ok")

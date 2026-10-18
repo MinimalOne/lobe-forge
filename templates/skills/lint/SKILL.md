@@ -50,15 +50,20 @@ W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" path
 
 ```bash
 W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
-"$W" build >/dev/null && cd "$LOBE"   # catalog.jsonl lives in the lobe home
+"$W" build >/dev/null && builtin cd "$LOBE"   # catalog.jsonl lives in the lobe home
 # E candidates: last_updated older than 6 months
 python3 -c "import json,datetime as d;c=(d.date.today()-d.timedelta(days=183)).isoformat();[print(e['page'],e['last_updated']) for e in map(json.loads,open('catalog.jsonl')) if e['last_updated']<c]"
+# E candidates: a date in the page name, title or summary that is after last_updated and already past
+python3 -c "import json,re,datetime as d;t=d.date.today().isoformat();[print(e['page'],e['last_updated'],'event',x) for e in map(json.loads,open('catalog.jsonl')) for x in sorted(set(re.findall(r'\d{4}-\d{2}-\d{2}',e['page']+' '+e['title']+' '+e['summary']))) if e['last_updated']<x<=t]"
 # F candidates: pages sharing a source
 python3 -c "import json,collections as C;m=C.defaultdict(list);[m[s].append(e['page']) for e in map(json.loads,open('catalog.jsonl')) for s in e['sources']];[print(s,'->',' '.join(v)) for s,v in m.items() if len(v)>1]"
 ```
 
 - **E — outdated**: flag a candidate if it states a price, version, status, plan or date-bound
-  fact, or if a newer `{{RAW}}/` file covers the topic (`"$W" search <topic>`).
+  fact, or if a newer `{{RAW}}/` file covers the topic (`"$W" search <topic>`). An `event`
+  candidate was written before a date it names that has now passed (a deadline, a cutover, a
+  planned change): check whether it still reads as a forecast or lists open questions, and say
+  which new source would settle it.
 - **F — contradictions**: compare only pages in one F cluster or neighbours from
   `"$W" links <page>`. Compare summaries first; open both pages only when they make
   overlapping claims. Report "A says X, B says Y".

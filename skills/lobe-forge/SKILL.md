@@ -56,13 +56,25 @@ python3 "$FORGE" scan "<path>"
 ```
 
 Each hit prints `wiki_dir`, `raw_dir`, page count, how many pages are `legacy` (old body format,
-no frontmatter), the git `remote`, and `managed_by` (an existing `*-ask` skill or an
-`adopted:<name>` home).
+no frontmatter), the git `remote`, and:
+
+- `tracked` — `yes`, `untracked`, `ignored(<rule>)` or `no-git`. Anything but `yes` means the
+  wiki is in no commit: it has **no backup**, and adopting it in place commits nothing of it.
+  Say so before Step 3.
+- `raw_authors` — people who committed to `raw_dir`. More than 1 means it is the repo's shared
+  docs folder, not a private source folder: the lobe will read it, and `<name>-add-raw` would
+  write into it. Say so, and suggest a separate raw folder for new sources if that matters.
+- `managed_by` — an existing `*-ask` skill in the repo or an `adopted:<name>` home.
+- `other_skills` — installed skills (`<config>:<skill>` or `<config>:<plugin>:<skill>`) that
+  name this repo or its `<wiki_dir>/index.md`, e.g. a generic wiki plugin.
 
 - **No hits** → a fresh lobe in that repo (Step 3, default `wiki/` + `raw/`).
 - **Hits** → ask which to adopt (`AskUserQuestion`, multiSelect, one option per wiki: path,
   pages, managed_by), plus "none — create a fresh lobe". Recommend **not** adopting a wiki whose
   `managed_by` is not `-`: it already has skills, and a second set would compete with them.
+  If `other_skills` is not `-`, adopting is fine, but those skills will compete with the new
+  ones: offer to remove them afterwards (`claude plugin uninstall <plugin>@<marketplace>`, or
+  the skill link), and do it only on a yes.
 - For **each** wiki to adopt, ask its lobe name (suggest the repo name, e.g. `team-notes`) and
   purpose, and keep its layout: `--wiki-dir <wiki_dir> --raw-dir <raw_dir>`. If `raw_dir=?`, ask
   which folder holds its sources (often `docs`), or use `raw`.
@@ -123,15 +135,23 @@ a git repo.
 In place, show `git -C "<path>" status --short`, then commit only the files `create` listed:
 
 ```bash
-cd "<path>" && git add <files listed under Created> && git commit -q -m "lobe: create <name> lobe"
+git -C "<path>" add <files listed under Created> && git -C "<path>" commit -q -m "lobe: create <name> lobe"
 ```
 
 For an adopted repo, ask before committing — it is an existing project.
 
-If the repo has no remote, ask whether to create a **private** GitHub repo. Only on a yes:
+If the repo has no remote, read `**Origin**:` in its `LOBE.md` first. `create` records where
+the wiki content came from: `new`, a remote such as `github.com/<owner>/<repo>`, or what
+`--origin` said. Offer a personal remote only when Origin is `new`, or a repo owned by your
+login (`gh api user -q .login`). Otherwise the content belongs to someone else (often an
+employer) — do **not** offer `gh repo create` under your account; say why, and suggest keeping
+it local or a private repo in the owner's org. When you move adopted content into a new repo,
+pass `--origin "<where it came from>"` so this check still works.
+
+Only when the check allows it, ask whether to create a **private** GitHub repo. Only on a yes:
 
 ```bash
-cd "<path>" && gh repo create "<owner>/<repo-name>" --private --source . --push
+builtin cd "<path>" && gh repo create "<owner>/<repo-name>" --private --source . --push
 ```
 
 Never make it public unless the user asks explicitly — a lobe holds personal data.
@@ -173,3 +193,20 @@ python3 "$FORGE" upgrade --repo "<lobe repo or home>" --apply    # on a yes
 Show the dry run and ask before `--apply`. In place it refuses while those files have
 uncommitted changes; afterwards show `git -C "<path>" diff --stat` and commit with the paths it
 printed. An external home gets `*.bak` copies. If it reports new skills, run `install`.
+
+## Uninstall or move a lobe
+
+```bash
+FORGE="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/scripts/forge.py"
+python3 "$FORGE" uninstall --repo "<lobe repo or home>"            # remove its skill links everywhere
+python3 "$FORGE" uninstall --repo "<lobe home>" --purge            # external: also delete the home
+```
+
+It removes only links that point into that lobe; `--target <dir>` limits it to one installation.
+`--purge` works for external homes only, and refuses (deleting nothing) if the home holds files
+forge did not generate. Wiki pages and sources are never touched. In place, the lobe files are
+part of the repo: remove them with `git rm` if wanted.
+
+To move a lobe (e.g. external → its own repo): move or copy the wiki, `uninstall --purge` the
+old home, then `create` in the new repo with `--origin "<where the content came from>"`.
+Confirm with the user before `--purge`.

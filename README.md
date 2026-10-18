@@ -44,6 +44,10 @@ layout stays as it is (e.g. `llmwiki/` + `docs/`), and no page is rewritten.
 python3 scripts/forge.py scan ~/code      # read-only report
 ```
 
+For each wiki the scan reports whether git tracks it (an ignored wiki has no backup), how many
+people commit to its raw folder (more than one means a shared docs folder), and any installed
+skill or plugin that already serves it.
+
 ## What a lobe repo looks like
 
 ```
@@ -76,9 +80,23 @@ python3 scripts/forge.py upgrade --repo <lobe-repo-or-home>           # dry run:
 python3 scripts/forge.py upgrade --repo <lobe-repo-or-home> --apply
 ```
 
-Name, purpose and folders are read back from the lobe itself. Wiki pages and sources are never
-touched. In place, the files must be committed first so git holds the old version; an external
-home gets `*.bak` copies instead.
+Name, purpose, folders and origin are read back from the lobe itself. Wiki pages and sources are
+never touched. In place, the files must be committed first so git holds the old version; an
+external home gets `*.bak` copies instead.
+
+`LOBE.md` records the lobe's **Origin**: `new`, the adopted repo's remote, or `--origin` (on
+`create` or `upgrade`). `/lobe-forge` offers to publish a lobe to your GitHub only when its
+content is yours, so a wiki adopted from an employer repo is never pushed to a personal account.
+
+## Uninstalling or moving a lobe
+
+```bash
+python3 scripts/forge.py uninstall --repo <lobe>              # remove its skill links everywhere
+python3 scripts/forge.py uninstall --repo <home> --purge      # external: also delete the home
+```
+
+Only links that point into that lobe are removed. `--purge` is for external homes only and
+deletes nothing if the home holds files forge did not generate.
 
 ## Development
 
@@ -86,5 +104,5 @@ home gets `*.bak` copies instead.
 python3 test_forge.py
 ```
 
-`forge.py` never deletes files; `create` only adds what is missing, and only `upgrade --apply`
-overwrites generated files.
+`create` only adds what is missing. Only `upgrade --apply` overwrites, and `uninstall` deletes,
+and only what forge itself made — never wiki pages or sources.

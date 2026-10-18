@@ -328,6 +328,7 @@ def cmd_lint(args) -> int:
                 else:
                     print(f"    (run with --show-legacy to list all {leg_count})")
                 print("    (convert: convert-legacy to preview, convert-legacy --apply to write)")
+                print("    (H is not checked on legacy pages: convert them first)")
             for page, msg in items:
                 print(f"  {n}. {page} — {msg}")
                 n += 1

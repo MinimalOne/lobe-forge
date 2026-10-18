@@ -8,18 +8,21 @@ Commands:
   create    Create a lobe, or adopt an existing wiki, and symlink its skills into Claude
   install   Symlink an existing lobe's skills into Claude installations (e.g. a fresh clone)
   upgrade   Re-render an existing lobe's generated files from the current templates
+  uninstall Remove a lobe's skill links (and, with --purge, an external home's generated files)
 
 Two modes for create:
   in place  (default)   lobe files (skills/, wikictl, wiki_tool.py, LOBE.md) go into the repo
   external  (--home D)  lobe files go into D, with D/repo -> the wiki repo; the repo is not touched
 
-Re-running create is safe: existing files are kept, only missing pieces are added. Nothing is
-deleted. Only `upgrade --apply` overwrites, and only the generated files (wiki_tool.py, wikictl,
-LOBE.md, skills/<name>-*/SKILL.md) — never wiki pages or sources.
+Re-running create is safe: existing files are kept, only missing pieces are added. Only
+`upgrade --apply` overwrites, and `uninstall` deletes, and only what forge made: the generated
+files (wiki_tool.py, wikictl, LOBE.md, skills/<name>-*/SKILL.md) and skill links — never wiki
+pages or sources.
 """
 
 import argparse
 import datetime
+import json
 import os
 import re
 import subprocess
@@ -89,9 +92,10 @@ def render(text: str, **values: str) -> str:
     return text
 
 
-def generated_files(name: str, purpose: str, wiki_dir: str, raw_dir: str, external: bool) -> dict[str, tuple[str, int | None]]:
+def generated_files(name: str, purpose: str, wiki_dir: str, raw_dir: str, external: bool,
+                    origin: str) -> dict[str, tuple[str, int | None]]:
     """Every file forge renders into a lobe home: relative path -> (text, mode)."""
-    values = dict(NAME=name, PURPOSE=purpose, WIKI=wiki_dir, RAW=raw_dir,
+    values = dict(NAME=name, PURPOSE=purpose, WIKI=wiki_dir, RAW=raw_dir, ORIGIN=origin,
                   REPO_LINK="repo" if external else ".",
                   COMMIT_RULE=COMMIT_EXTERNAL if external else COMMIT_IN_PLACE)
     files = {
@@ -105,18 +109,81 @@ def generated_files(name: str, purpose: str, wiki_dir: str, raw_dir: str, extern
     return files
 
 
-def lobe_settings(lobe: Path) -> tuple[str, str, str, str, bool] | str:
-    """(name, purpose, wiki_dir, raw_dir, external) read back from a generated lobe, or an error."""
+def lobe_settings(lobe: Path) -> tuple[str, str, str, str, bool, str] | str:
+    """(name, purpose, wiki_dir, raw_dir, external, origin) read back from a generated lobe, or an error."""
     asks = sorted(p.parent.name for p in lobe.glob("skills/*-ask/SKILL.md"))
     if len(asks) != 1 or not (lobe / "wikictl").is_file() or not (lobe / "LOBE.md").is_file():
         return f"{lobe} is not a lobe repo or lobe home (needs wikictl, LOBE.md and one skills/*-ask)"
-    purpose = re.search(r"^\*\*Purpose\*\*: (.+)$", (lobe / "LOBE.md").read_text(), re.MULTILINE)
+    lobe_md = (lobe / "LOBE.md").read_text()
+    purpose = re.search(r"^\*\*Purpose\*\*: (.+)$", lobe_md, re.MULTILINE)
+    origin = re.search(r"^\*\*Origin\*\*: (.+)$", lobe_md, re.MULTILINE)  # absent before v1.3.0
     wikictl = (lobe / "wikictl").read_text()
     wiki = re.search(r'WIKI_DIR="([^"]+)"', wikictl)
     raw = re.search(r'WIKI_RAW_DIR="([^"]+)"', wikictl)
     if not (purpose and wiki and raw):
         return f"cannot read the purpose from LOBE.md or the folders from wikictl in {lobe}"
-    return asks[0].removesuffix("-ask"), purpose.group(1).strip(), wiki.group(1), raw.group(1), (lobe / "repo").is_symlink()
+    return (asks[0].removesuffix("-ask"), purpose.group(1).strip(), wiki.group(1), raw.group(1),
+            (lobe / "repo").is_symlink(), origin.group(1).strip() if origin else "unknown")
+
+
+def remote_origin(repo: Path) -> str:
+    """'github.com/<owner>/<repo>' for a GitHub remote, the raw URL otherwise."""
+    url = git(repo, "remote", "get-url", "origin")
+    if not url:
+        return "local repo, no remote"
+    m = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$", url)
+    return f"github.com/{m.group(1)}" if m else url
+
+
+def tracked_state(repo: Path, rel: str) -> str:
+    if not git(repo, "rev-parse", "--is-inside-work-tree"):
+        return "no-git"
+    if git(repo, "ls-files", "--", rel):
+        return "yes"
+    rule = git(repo, "check-ignore", "-v", rel)  # "<source>:<line>:<pattern>\t<path>"
+    return f"ignored({rule.split(chr(9))[0]})" if rule else "untracked"
+
+
+def installed_skill_files() -> list[tuple[str, Path]]:
+    """(label, SKILL.md) for every skill in each Claude config dir: skills/ and installed plugins."""
+    out = []
+    for t in candidate_targets():
+        out += [(f"{t.name}:{p.parent.name}", p) for p in sorted(t.glob("skills/*/SKILL.md"))]
+        try:
+            plugins = json.loads((t / "plugins" / "installed_plugins.json").read_text()).get("plugins", {})
+        except (OSError, ValueError, AttributeError):
+            plugins = {}
+        for key, installs in plugins.items():
+            for inst in installs if isinstance(installs, list) else []:
+                path = inst.get("installPath") if isinstance(inst, dict) else None
+                if path:
+                    out += [(f"{t.name}:{key.split('@')[0]}:{p.parent.name}", p)
+                            for p in sorted(Path(path).glob("skills/*/SKILL.md"))]
+    return out
+
+
+def other_wiki_skills(repo: Path, wiki_dir: str) -> list[str]:
+    """Installed skills, outside this repo, that name this repo or a <wiki_dir>/index.md — they
+    would compete with a new lobe's skills. lobe-forge skills (they run wikictl) are skipped:
+    managed_by already reports those."""
+    paths = [str(repo)]
+    if Path.home().resolve() in repo.parents:  # skills usually spell paths as ~/...
+        paths.append("~/" + str(repo.relative_to(Path.home().resolve())))
+    pat = re.compile("|".join(re.escape(p) + r"(?![\w.-])" for p in paths)
+                     + r"|(?<![\w-])" + re.escape(wiki_dir) + r"/index\.md")
+    hits = set()
+    for label, p in installed_skill_files():
+        try:
+            text = p.read_text(errors="replace")
+        except OSError:
+            continue
+        if "wikictl" not in text and pat.search(text):
+            hits.add(label)
+    return sorted(hits)
+
+
+def raw_authors(repo: Path, rel: str) -> int:
+    return len(set(git(repo, "log", "--format=%ae", "--", rel).split()))
 
 
 def candidate_targets() -> list[Path]:
@@ -194,10 +261,14 @@ def cmd_scan(args) -> int:
         legacy = sum(1 for p in pages if not p.read_text(errors="replace").startswith("---\n"))
         raw = RAW_FOR[w.name] if (w.parent / RAW_FOR[w.name]).is_dir() else "?"
         managed = wiki_skills_in(repo) + [f"adopted:{h}" for h in adopted_homes_for(repo)]
+        rel = str(w.relative_to(repo))
+        authors = raw_authors(repo, raw) if raw != "?" else 0
         say(f"{w}")
-        say(f"  repo={repo}  wiki_dir={w.relative_to(repo)}  raw_dir={raw}  pages={len(pages)}  legacy={legacy}")
+        say(f"  repo={repo}  wiki_dir={rel}  raw_dir={raw}  pages={len(pages)}  legacy={legacy}")
         say(f"  remote={git(repo, 'remote', 'get-url', 'origin') or '-'}")
+        say(f"  tracked={tracked_state(repo, rel)}  raw_authors={authors if raw != '?' else '-'}")
         say(f"  managed_by={','.join(managed) or '-'}")
+        say(f"  other_skills={','.join(other_wiki_skills(repo, rel)) or '-'}")
     return 0
 
 
@@ -230,6 +301,7 @@ def cmd_create(args) -> int:
         lobe = repo
 
     wiki = repo / args.wiki_dir
+    origin = args.origin or (remote_origin(repo) if wiki.is_dir() else "new")
     if wiki.is_dir() and not (wiki / "index.md").exists() and any(wiki.iterdir()):
         return fail(f"{wiki} exists and is not an LLM wiki (no index.md) — pick another --wiki-dir or repo")
     if not wiki.is_dir():
@@ -269,7 +341,7 @@ def cmd_create(args) -> int:
             gitignore.write_text("\n".join(lines + ["catalog.jsonl"]) + "\n")
             made.append(".gitignore (catalog.jsonl)")
 
-    for rel, (text, mode) in generated_files(name, purpose, args.wiki_dir, args.raw_dir, external).items():
+    for rel, (text, mode) in generated_files(name, purpose, args.wiki_dir, args.raw_dir, external, origin).items():
         write_new(lobe / rel, text, made, lobe, mode)
 
     say(f"\nLobe '{name}' ({'external home ' + str(lobe) if external else 'in place'}) for {repo}")
@@ -298,7 +370,9 @@ def cmd_upgrade(args) -> int:
     settings = lobe_settings(lobe)
     if isinstance(settings, str):
         return fail(settings)
-    name, _, _, _, external = settings
+    if args.origin:
+        settings = (*settings[:5], " ".join(args.origin.split()))
+    name, _, _, _, external, _ = settings
     files = generated_files(*settings)
     stale = [rel for rel, (text, _) in files.items()
              if not (lobe / rel).is_file() or (lobe / rel).read_text() != text]
@@ -338,6 +412,46 @@ def cmd_upgrade(args) -> int:
     return 0
 
 
+def cmd_uninstall(args) -> int:
+    lobe = Path(args.repo).expanduser().resolve()
+    settings = lobe_settings(lobe)
+    if isinstance(settings, str):
+        return fail(settings)
+    name, *_, external, _ = settings
+    doomed: list[Path] = []
+    if args.purge:
+        if not external:
+            return fail("--purge is for external homes only; in place the lobe files are part of the repo "
+                        f"— remove them with git rm in {lobe}")
+        made = {lobe / rel for rel in generated_files(*settings)}
+        made |= {p.with_name(p.name + ".bak") for p in made} | {lobe / "catalog.jsonl", lobe / "repo"}
+        doomed = [p for p in made if p.is_symlink() or p.exists()]
+        extra = [p for p in lobe.rglob("*") if not p.is_dir() and p not in made and lobe / "repo" not in p.parents]
+        if extra:
+            return fail(f"{lobe} holds files forge did not generate — nothing removed:\n"
+                        + "\n".join(f"  {p.relative_to(lobe)}" for p in sorted(extra)))
+
+    skills = (lobe / "skills").resolve()
+    targets = [Path(t).expanduser() for t in args.target] or candidate_targets()
+    removed = 0
+    for t in targets:
+        for link in sorted((t / "skills").glob("*")):
+            if link.is_symlink() and Path(os.path.realpath(link)).parent == skills:
+                link.unlink()
+                say(f"  unlinked {link}")
+                removed += 1
+    say(f"Removed {removed} skill link(s) for lobe '{name}'.")
+
+    if args.purge:
+        for p in doomed:
+            p.unlink()
+        for d in sorted((p for p in lobe.rglob("*") if p.is_dir() and not p.is_symlink()), reverse=True):
+            d.rmdir()  # only empty dirs remain: everything else was checked above
+        lobe.rmdir()
+        say(f"Purged external home {lobe} ({len(doomed)} file(s)); the wiki repo was not touched.")
+    return 0
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="forge.py", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -356,6 +470,7 @@ def main() -> None:
     c.add_argument("--raw-dir", default="raw", help="Raw sources folder relative to the repo (docs for lobe layout)")
     c.add_argument("--home", help=f"External mode: put lobe files here, not in the repo (e.g. {ADOPTED_HOME}/<name>)")
     c.add_argument("--target", action="append", default=[], help="Claude config dir to install into (repeatable)")
+    c.add_argument("--origin", help="Where the wiki content came from (default: new, or the repo's remote when adopting)")
 
     i = sub.add_parser("install", help="Symlink an existing lobe's skills")
     i.add_argument("--repo", required=True, help="Lobe repo (in place) or lobe home (external)")
@@ -364,10 +479,16 @@ def main() -> None:
     u = sub.add_parser("upgrade", help="Re-render a lobe's generated files from the current templates")
     u.add_argument("--repo", required=True, help="Lobe repo (in place) or lobe home (external)")
     u.add_argument("--apply", action="store_true", help="Write the files (default: dry run)")
+    u.add_argument("--origin", help="Set where the wiki content came from (written to LOBE.md)")
+
+    r = sub.add_parser("uninstall", help="Remove a lobe's skill links; --purge also deletes an external home")
+    r.add_argument("--repo", required=True, help="Lobe repo (in place) or lobe home (external)")
+    r.add_argument("--target", action="append", default=[], help="Claude config dir (default: all of them)")
+    r.add_argument("--purge", action="store_true", help="External home only: delete its generated files")
 
     args = p.parse_args()
     cmds = {"targets": cmd_targets, "scan": cmd_scan, "create": cmd_create, "install": cmd_install,
-            "upgrade": cmd_upgrade}
+            "upgrade": cmd_upgrade, "uninstall": cmd_uninstall}
     sys.exit(cmds[args.command](args))
 
 

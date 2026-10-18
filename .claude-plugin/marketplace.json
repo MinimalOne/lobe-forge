@@ -1,0 +1,16 @@
+{
+  "name": "lobe-forge",
+  "owner": {
+    "name": "MinimalOne"
+  },
+  "plugins": [
+    {
+      "name": "lobe-forge",
+      "source": "./",
+      "description": "Create git-backed LLM wikis (lobes) with their own named skills: <name>-add-raw, -ingest, -ask, -lint",
+      "license": "MIT",
+      "keywords": ["llm-wiki", "second-brain", "knowledge-base", "skills", "generator"],
+      "category": "knowledge"
+    }
+  ]
+}

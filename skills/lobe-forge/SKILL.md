@@ -10,7 +10,7 @@ description: |
   Trigger phrases: "/lobe-forge", "create a lobe", "new lobe", "forge a lobe",
   "new second brain wiki", "create wiki skills for", "install my lobe", "adopt my llmwiki",
   "upgrade my lobes", "uninstall a lobe".
-version: 1.4.2
+version: 1.4.3
 allowed-tools:
   - Bash
   - AskUserQuestion

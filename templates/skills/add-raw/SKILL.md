@@ -1,7 +1,7 @@
 ---
 name: {{NAME}}-add-raw
 description: |
-  Add a new source to the {{NAME}} lobe's raw/ folder ({{PURPOSE}}). Saves a URL's content,
+  Add a new source to the {{NAME}} lobe's {{RAW}}/ folder ({{PURPOSE}}). Saves a URL's content,
   copies a local file (PDF, image, markdown, doc), or saves pasted or typed text.
   Trigger phrases: "/{{NAME}}-add-raw", "add to {{NAME}}", "save this to {{NAME}}",
   "add {{NAME}} source", "new {{NAME}} doc".
@@ -18,16 +18,18 @@ allowed-tools:
 
 Add a source document to the **{{NAME}}** lobe. Purpose: {{PURPOSE}}
 
+**Git**: {{COMMIT_RULE}}
+
 ## Paths
 
 `SKILL_BASE_DIR` is the path shown in the `Base directory for this skill:` header. Shell
 variables do not persist between Bash calls — start every Bash command with:
 
 ```bash
-REPO=$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)   # repo root, resolved through the install symlink
+W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 ```
 
-> **Rule**: `raw/` is append-only. Never modify or delete a file in it.
+> **Rule**: `{{RAW}}/` is append-only. Never modify or delete a file in it.
 
 ## Workflow
 
@@ -46,7 +48,8 @@ From context, or ask with `AskUserQuestion`:
 
 - Filename: `kebab-case`, descriptive, with a date prefix when the content is time-bound
   (e.g. `2026-10-18-school-meeting-notes.md`). Optional subfolder by topic if one already exists
-  (`ls "$REPO/raw"`).
+  (`ls "$RAW"`).
+- Create the folder if it does not exist yet: `mkdir -p "$RAW"`.
 - If the destination exists, ask before choosing another name — never overwrite.
 - URL and text sources start with:
 
@@ -60,8 +63,8 @@ captured: <YYYY-MM-DD>
 ### Step 3 — Commit
 
 ```bash
-REPO=$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)
-git -C "$REPO" add "raw/<file>" && git -C "$REPO" commit -q -m "raw: add <file>"
+W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+git -C "$REPO" add "{{RAW}}/<file>" && git -C "$REPO" commit -q -m "raw: add <file>"
 ```
 
 Stage only the new file.
@@ -69,7 +72,7 @@ Stage only the new file.
 ## Output
 
 ```
-Added: raw/<file>
+Added: {{RAW}}/<file>
 
-Next: /{{NAME}}-ingest raw/<file>
+Next: /{{NAME}}-ingest {{RAW}}/<file>
 ```

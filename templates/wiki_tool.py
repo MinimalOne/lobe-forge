@@ -11,8 +11,8 @@ Commands:
   sections     List index.md section headings
   index-add    Insert one row into an index.md section without reading the whole index
 
-Paths default to this repo's layout (wiki/, raw/). Override with WIKI_ROOT, WIKI_DIR
-and WIKI_RAW_DIR to point it at another layout.
+Paths default to this repo's layout (wiki/, raw/). Override with WIKI_ROOT, WIKI_DIR,
+WIKI_RAW_DIR and WIKI_CATALOG to point it at another layout.
 
 Checks run by lint:
   G  YAML frontmatter — missing, source_count mismatch,      [data error]
@@ -34,7 +34,7 @@ from pathlib import Path
 REPO    = Path(os.environ.get("WIKI_ROOT") or Path(__file__).parent)
 WIKI    = REPO / os.environ.get("WIKI_DIR", "wiki")
 RAW     = REPO / os.environ.get("WIKI_RAW_DIR", "raw")
-CATALOG = REPO / "catalog.jsonl"
+CATALOG = Path(os.environ.get("WIKI_CATALOG") or REPO / "catalog.jsonl")
 MANIFEST = REPO / "source-manifest.jsonl"
 INDEX   = WIKI / "index.md"
 SKIP    = {"index.md", "log.md"}

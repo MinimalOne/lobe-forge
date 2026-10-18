@@ -8,11 +8,11 @@ sources and asks questions; Claude maintains the wiki through the `{{NAME}}-*` s
 ## Layout
 
 ```
-raw/            source documents — append-only, never modified
-wiki/           wiki pages, one concept or entity per page
-wiki/index.md   table of contents, grouped by ## sections
-wiki/log.md     append-only operation log
-wiki_tool.py    deterministic CLI: search, links, sections, index-add, lint, build
+{{RAW}}/            source documents — append-only, never modified
+{{WIKI}}/           wiki pages, one concept or entity per page
+{{WIKI}}/index.md   table of contents, grouped by ## sections
+{{WIKI}}/log.md     append-only operation log
+wikictl         wrapper: wiki_tool.py for this lobe (search, links, sections, index-add, lint, build)
 skills/         the {{NAME}}-add-raw / -ingest / -ask / -lint skills (symlinked into Claude)
 ```
 
@@ -20,7 +20,7 @@ skills/         the {{NAME}}-add-raw / -ingest / -ask / -lint skills (symlinked 
 
 | Skill | Use |
 |---|---|
-| `/{{NAME}}-add-raw` | Save a URL, file (PDF, image, doc) or pasted text into `raw/` |
+| `/{{NAME}}-add-raw` | Save a URL, file (PDF, image, doc) or pasted text into `{{RAW}}/` |
 | `/{{NAME}}-ingest` | Turn a raw source into wiki pages |
 | `/{{NAME}}-ask` | Answer a question from the wiki, with citations |
 | `/{{NAME}}-lint` | Health check: format, links, index, stale and contradicting pages |
@@ -34,7 +34,7 @@ summary: One sentence (15-40 words) saying what this page is.
 aliases:
   - Other Name
 sources:
-  - raw/source-file.md
+  - {{RAW}}/source-file.md
 source_count: 1
 provenance:
   - "Conversation with Claude, 2026-10-18"
@@ -51,20 +51,23 @@ Content with [[wiki-links]] and (source: source-file.md) after factual claims.
 ```
 
 - `source_count` must equal the number of `sources` items.
-- `sources` lists files under `raw/`; anything else (conversations, links not saved) goes in `provenance`.
+- `sources` lists files under `{{RAW}}/`; anything else (conversations, links not saved) goes in `provenance`.
 - `aliases` (optional) are other names for the same thing; search matches them.
 - Page names: lowercase with hyphens. Index descriptions: 25 words or fewer.
 
 ## Rules
 
-- Never modify `raw/`. Never rewrite an existing page wholesale — targeted edits only.
+- Never modify `{{RAW}}/`. Never rewrite an existing page wholesale — targeted edits only.
 - Every claim comes from a source. Contradictions are recorded, not silently resolved.
-- Never read `wiki/index.md` or `wiki/log.md` whole: use `wiki_tool.py search`, `index-add`, and `cat >>`.
+- Never read `{{WIKI}}/index.md` or `{{WIKI}}/log.md` whole: use `wikictl search`, `wikictl index-add`, and `cat >>`.
 
 ## On a new machine
 
-Clone this repo, then link the skills into Claude:
+From the folder that holds this file (after cloning the wiki repo, if this is it), link the
+skills into Claude:
 
 ```bash
 for s in skills/*/; do ln -s "$PWD/$s" ~/.claude/skills/; done
 ```
+
+If this folder is a separate lobe home, also recreate its `repo` link to the wiki repo.

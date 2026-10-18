@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """
-forge.py — scaffold a lobe (LLM wiki) repo and install its <name>-* skills.
+forge.py — scaffold or adopt a lobe (LLM wiki) and install its <name>-* skills.
 
 Commands:
   targets   List Claude installations (config dirs) that skills can be installed into
-  create    Scaffold a lobe repo, render its skills, and symlink them into Claude installations
-  install   Symlink an existing lobe repo's skills into Claude installations (e.g. a fresh clone)
+  scan      Find existing LLM wikis (llmwiki/ or wiki/ with an index.md) under a directory
+  create    Create a lobe, or adopt an existing wiki, and symlink its skills into Claude
+  install   Symlink an existing lobe's skills into Claude installations (e.g. a fresh clone)
 
-Re-running create on an existing lobe repo is safe: existing files are kept, only missing
-pieces are added. Nothing is ever overwritten or deleted.
+Two modes for create:
+  in place  (default)   lobe files (skills/, wikictl, wiki_tool.py, LOBE.md) go into the repo
+  external  (--home D)  lobe files go into D, with D/repo -> the wiki repo; the repo is not touched
+
+Re-running create is safe: existing files are kept, only missing pieces are added. Nothing is
+ever overwritten or deleted.
 """
 
 import argparse
 import datetime
+import os
 import re
 import subprocess
 import sys
@@ -22,6 +28,14 @@ FORGE = Path(__file__).resolve().parent.parent
 TEMPLATES = FORGE / "templates"
 KINDS = ("add-raw", "ingest", "ask", "lint")
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,29}$")
+WIKI_NAMES = ("llmwiki", "wiki")
+RAW_FOR = {"llmwiki": "docs", "wiki": "raw"}  # conventional raw dir per layout
+SKIP_DIRS = {".git", "node_modules", "vendor", ".venv", "venv", "__pycache__", ".terraform", "dist", "build"}
+ADOPTED_HOME = Path.home() / "lobes" / "_adopted"
+
+COMMIT_IN_PLACE = "commit wiki changes as shown in the steps below; ask before pushing."
+COMMIT_EXTERNAL = ("this wiki lives in a repo that is not a personal lobe repo — before every commit, "
+                   "show `git -C \"$REPO\" diff --cached --stat` and ask; never push unless asked.")
 
 INDEX = """# {title} Wiki — Index
 
@@ -51,17 +65,26 @@ def fail(msg: str) -> int:
     return 1
 
 
-def write_new(path: Path, text: str, made: list[str], root: Path) -> None:
+def git(repo: Path, *args: str) -> str:
+    r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def write_new(path: Path, text: str, made: list[str], root: Path, mode: int | None = None) -> None:
     """Write only if the file does not exist yet."""
     if path.exists():
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
+    if mode:
+        path.chmod(mode)
     made.append(str(path.relative_to(root)))
 
 
-def render(text: str, name: str, purpose: str) -> str:
-    return text.replace("{{NAME}}", name).replace("{{PURPOSE}}", purpose)
+def render(text: str, **values: str) -> str:
+    for k, v in values.items():
+        text = text.replace("{{" + k + "}}", v)
+    return text
 
 
 def candidate_targets() -> list[Path]:
@@ -70,14 +93,41 @@ def candidate_targets() -> list[Path]:
     return [d for d in dirs if d.is_dir() and ((d / "settings.json").exists() or (d / "skills").is_dir())]
 
 
-def link_skills(repo: Path, names: list[str], targets: list[Path]) -> int:
-    """Symlink repo/skills/<skill> into <target>/skills/. Refuses to replace anything else."""
+def find_wikis(root: Path, depth: int) -> list[Path]:
+    """Directories named llmwiki/ or wiki/ that contain an index.md, up to `depth` levels below root."""
+    found = []
+    base = len(root.parts)
+    for dirpath, dirnames, _ in os.walk(root):
+        here = Path(dirpath)
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and len(here.parts) - base < depth]
+        if here.name in WIKI_NAMES and (here / "index.md").is_file():
+            found.append(here)
+            dirnames[:] = []  # a wiki's subfolders are pages, not more wikis
+    return sorted(found)
+
+
+def wiki_skills_in(repo: Path) -> list[str]:
+    """*-ask skills a repo already ships (lobe-forge skills/, plugin skills, project skills) —
+    a sign that something already manages its wiki."""
+    pats = ["skills/*-ask/SKILL.md", "plugins/*/skills/*-ask/SKILL.md", ".claude/skills/*-ask/SKILL.md"]
+    return sorted({p.parent.name for pat in pats for p in repo.glob(pat)})
+
+
+def adopted_homes_for(repo: Path) -> list[str]:
+    if not ADOPTED_HOME.is_dir():
+        return []
+    return sorted(h.name for h in ADOPTED_HOME.iterdir()
+                  if (h / "repo").is_symlink() and (h / "repo").resolve() == repo.resolve())
+
+
+def link_skills(lobe: Path, names: list[str], targets: list[Path]) -> int:
+    """Symlink lobe/skills/<skill> into <target>/skills/. Refuses to replace anything else."""
     errors = 0
     for t in targets:
         skills_dir = t.expanduser() / "skills"
         skills_dir.mkdir(parents=True, exist_ok=True)
         for skill in names:
-            src = repo / "skills" / skill
+            src = lobe / "skills" / skill
             dst = skills_dir / skill
             if dst.is_symlink() and dst.resolve() == src.resolve():
                 say(f"  ok       {dst} (already linked)")
@@ -90,9 +140,32 @@ def link_skills(repo: Path, names: list[str], targets: list[Path]) -> int:
     return 1 if errors else 0
 
 
+# ── commands ─────────────────────────────────────────────────────────────────
+
 def cmd_targets(_args) -> int:
     for d in candidate_targets():
         say(str(d))
+    return 0
+
+
+def cmd_scan(args) -> int:
+    root = Path(args.dir).expanduser().resolve()
+    if not root.is_dir():
+        return fail(f"{root} is not a directory")
+    wikis = find_wikis(root, args.depth)
+    if not wikis:
+        say(f"No LLM wikis found under {root}")
+        return 0
+    for w in wikis:
+        repo = Path(git(w, "rev-parse", "--show-toplevel") or w.parent)
+        pages = [p for p in w.glob("*.md") if p.name not in ("index.md", "log.md")]
+        legacy = sum(1 for p in pages if not p.read_text(errors="replace").startswith("---\n"))
+        raw = RAW_FOR[w.name] if (w.parent / RAW_FOR[w.name]).is_dir() else "?"
+        managed = wiki_skills_in(repo) + [f"adopted:{h}" for h in adopted_homes_for(repo)]
+        say(f"{w}")
+        say(f"  repo={repo}  wiki_dir={w.relative_to(repo)}  raw_dir={raw}  pages={len(pages)}  legacy={legacy}")
+        say(f"  remote={git(repo, 'remote', 'get-url', 'origin') or '-'}")
+        say(f"  managed_by={','.join(managed) or '-'}")
     return 0
 
 
@@ -103,45 +176,79 @@ def cmd_create(args) -> int:
     purpose = " ".join(args.purpose.split())
     if not purpose:
         return fail("purpose must not be empty")
+    for d in (args.wiki_dir, args.raw_dir):
+        if d.startswith("/") or ".." in Path(d).parts:
+            return fail(f"--wiki-dir/--raw-dir must be relative to the repo: {d}")
 
     repo = Path(args.repo).expanduser().resolve()
-    if repo.exists() and not repo.is_dir():
-        return fail(f"{repo} is not a directory")
-    repo.mkdir(parents=True, exist_ok=True)
-    if subprocess.run(["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
-                      capture_output=True).returncode != 0:
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        say(f"git init  {repo}")
+    external = args.home is not None
+    if external:
+        if not repo.is_dir():
+            return fail(f"{repo} does not exist — external mode only adopts existing repos")
+        lobe = Path(args.home).expanduser().resolve()
+        if lobe == repo or repo in lobe.parents:
+            return fail("--home must be outside the wiki repo")
+    else:
+        if repo.exists() and not repo.is_dir():
+            return fail(f"{repo} is not a directory")
+        repo.mkdir(parents=True, exist_ok=True)
+        if not git(repo, "rev-parse", "--is-inside-work-tree"):
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            say(f"git init  {repo}")
+        lobe = repo
 
-    wiki = repo / "wiki"
+    wiki = repo / args.wiki_dir
     if wiki.is_dir() and not (wiki / "index.md").exists() and any(wiki.iterdir()):
-        return fail(f"{wiki} already exists and is not a lobe wiki (no index.md) — use a different repo")
-    existing = [p.name for p in (repo / "skills").glob("*-ask")] if (repo / "skills").is_dir() else []
-    other = [s.removesuffix("-ask") for s in existing if s != f"{name}-ask"]
+        return fail(f"{wiki} exists and is not an LLM wiki (no index.md) — pick another --wiki-dir or repo")
+    if not wiki.is_dir():
+        others = [w for w in find_wikis(repo, 3) if w != wiki]
+        if others:
+            rel = others[0].relative_to(repo)
+            return fail(f"{repo} already has a wiki at {rel}/ — to adopt it pass --wiki-dir {rel}"
+                        f" --raw-dir {RAW_FOR.get(others[0].name, 'raw')}")
+        if external:
+            return fail(f"{wiki} does not exist — external mode adopts an existing wiki only")
+    existing = [p.name.removesuffix("-ask") for p in (lobe / "skills").glob("*-ask")] if (lobe / "skills").is_dir() else []
+    other = [s for s in existing if s != name]
     if other:
-        return fail(f"{repo} already holds lobe '{other[0]}' — one lobe per repo")
+        return fail(f"{lobe} already holds lobe '{other[0]}' — one lobe per repo or home")
 
     title = name.replace("-", " ").title()
-    today = datetime.date.today().isoformat()
+    values = dict(NAME=name, PURPOSE=purpose, WIKI=args.wiki_dir, RAW=args.raw_dir,
+                  REPO_LINK="repo" if external else ".",
+                  COMMIT_RULE=COMMIT_EXTERNAL if external else COMMIT_IN_PLACE)
     made: list[str] = []
 
-    write_new(repo / "raw" / ".gitkeep", "", made, repo)
-    write_new(wiki / "index.md", INDEX.format(title=title, purpose=purpose), made, repo)
-    write_new(wiki / "log.md", LOG.format(title=title, date=today, name=name), made, repo)
-    write_new(repo / "wiki_tool.py", (TEMPLATES / "wiki_tool.py").read_text(), made, repo)
-    (repo / "wiki_tool.py").chmod(0o755)
-    write_new(repo / "LOBE.md", render((TEMPLATES / "LOBE.md").read_text(), name, purpose), made, repo)
+    if external:
+        lobe.mkdir(parents=True, exist_ok=True)
+        link = lobe / "repo"
+        if link.is_symlink() and link.resolve() != repo:
+            return fail(f"{link} already points to {link.resolve()}")
+        if not link.exists():
+            link.symlink_to(repo)
+            made.append("repo -> " + str(repo))
+    else:
+        # wiki content is only scaffolded for a lobe repo we own; an adopted wiki keeps what it has
+        if not (repo / args.raw_dir).is_dir():
+            write_new(repo / args.raw_dir / ".gitkeep", "", made, repo)
+        write_new(wiki / "index.md", INDEX.format(title=title, purpose=purpose), made, repo)
+        write_new(wiki / "log.md", LOG.format(title=title, date=datetime.date.today().isoformat(), name=name),
+                  made, repo)
+        gitignore = repo / ".gitignore"
+        lines = gitignore.read_text().splitlines() if gitignore.exists() else []
+        if "catalog.jsonl" not in lines:
+            gitignore.write_text("\n".join(lines + ["catalog.jsonl"]) + "\n")
+            made.append(".gitignore (catalog.jsonl)")
+
+    write_new(lobe / "wiki_tool.py", (TEMPLATES / "wiki_tool.py").read_text(), made, lobe, 0o755)
+    write_new(lobe / "wikictl", render((TEMPLATES / "wikictl").read_text(), **values), made, lobe, 0o755)
+    write_new(lobe / "LOBE.md", render((TEMPLATES / "LOBE.md").read_text(), **values), made, lobe)
     for kind in KINDS:
         tpl = (TEMPLATES / "skills" / kind / "SKILL.md").read_text()
-        write_new(repo / "skills" / f"{name}-{kind}" / "SKILL.md", render(tpl, name, purpose), made, repo)
+        write_new(lobe / "skills" / f"{name}-{kind}" / "SKILL.md", render(tpl, **values), made, lobe)
 
-    gitignore = repo / ".gitignore"
-    lines = gitignore.read_text().splitlines() if gitignore.exists() else []
-    if "catalog.jsonl" not in lines:
-        gitignore.write_text("\n".join(lines + ["catalog.jsonl"]) + "\n")
-        made.append(".gitignore (catalog.jsonl)")
-
-    say(f"\nLobe '{name}' at {repo}")
+    say(f"\nLobe '{name}' ({'external home ' + str(lobe) if external else 'in place'}) for {repo}")
+    say(f"  wiki: {args.wiki_dir}/   raw: {args.raw_dir}/")
     say("Created:" if made else "Nothing new — lobe already complete.")
     for m in made:
         say(f"  {m}")
@@ -149,16 +256,16 @@ def cmd_create(args) -> int:
     if not args.target:
         return 0
     say("\nInstalling skills:")
-    return link_skills(repo, [f"{name}-{k}" for k in KINDS], [Path(t) for t in args.target])
+    return link_skills(lobe, [f"{name}-{k}" for k in KINDS], [Path(t) for t in args.target])
 
 
 def cmd_install(args) -> int:
-    repo = Path(args.repo).expanduser().resolve()
-    skills = sorted(p.parent.name for p in (repo / "skills").glob("*/SKILL.md"))
-    if not skills:
-        return fail(f"no skills/*/SKILL.md under {repo} — not a lobe repo")
+    lobe = Path(args.repo).expanduser().resolve()
+    skills = sorted(p.parent.name for p in (lobe / "skills").glob("*/SKILL.md"))
+    if not skills or not (lobe / "wikictl").exists():
+        return fail(f"{lobe} has no wikictl + skills/*/SKILL.md — not a lobe repo or lobe home")
     say(f"Installing {', '.join(skills)}:")
-    return link_skills(repo, skills, [Path(t) for t in args.target])
+    return link_skills(lobe, skills, [Path(t) for t in args.target])
 
 
 def main() -> None:
@@ -167,18 +274,26 @@ def main() -> None:
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("targets", help="List Claude config dirs")
 
-    c = sub.add_parser("create", help="Scaffold a lobe repo and install its skills")
+    s = sub.add_parser("scan", help="Find existing LLM wikis under a directory")
+    s.add_argument("dir")
+    s.add_argument("--depth", type=int, default=4)
+
+    c = sub.add_parser("create", help="Create or adopt a lobe and install its skills")
     c.add_argument("--name", required=True, help="Lobe name, e.g. personal -> personal-ask, personal-ingest, …")
     c.add_argument("--purpose", required=True, help="One line: what this lobe is for")
-    c.add_argument("--repo", required=True, help="Local path of the wiki repo (created and git-initialised if missing)")
+    c.add_argument("--repo", required=True, help="Local path of the wiki repo (created if missing, in place only)")
+    c.add_argument("--wiki-dir", default="wiki", help="Wiki folder relative to the repo (llmwiki for lobe layout)")
+    c.add_argument("--raw-dir", default="raw", help="Raw sources folder relative to the repo (docs for lobe layout)")
+    c.add_argument("--home", help=f"External mode: put lobe files here, not in the repo (e.g. {ADOPTED_HOME}/<name>)")
     c.add_argument("--target", action="append", default=[], help="Claude config dir to install into (repeatable)")
 
-    i = sub.add_parser("install", help="Symlink an existing lobe repo's skills")
-    i.add_argument("--repo", required=True)
+    i = sub.add_parser("install", help="Symlink an existing lobe's skills")
+    i.add_argument("--repo", required=True, help="Lobe repo (in place) or lobe home (external)")
     i.add_argument("--target", action="append", required=True)
 
     args = p.parse_args()
-    sys.exit({"targets": cmd_targets, "create": cmd_create, "install": cmd_install}[args.command](args))
+    cmds = {"targets": cmd_targets, "scan": cmd_scan, "create": cmd_create, "install": cmd_install}
+    sys.exit(cmds[args.command](args))
 
 
 if __name__ == "__main__":

@@ -29,12 +29,28 @@ Then run `/lobe-forge`. It asks for:
 3. **Repo** — create a new one, or use an existing local clone / GitHub URL
 4. **Claude installations** — e.g. `~/.claude` and `~/.claude-personal`
 
+## Adopting existing wikis
+
+Give `/lobe-forge` an existing repo, or a folder of repos, and it scans for `llmwiki/` or
+`wiki/` folders with an `index.md`, then offers to adopt each one as a named lobe. The wiki's
+layout stays as it is (e.g. `llmwiki/` + `docs/`), and no page is rewritten.
+
+- **In place** (your own repos): lobe files are added to the repo and committed with it.
+- **External** (repos owned by someone else, e.g. an employer org): lobe files go to
+  `~/lobes/_adopted/<name>/` with a `repo` link back. Nothing is written into the repo, and the
+  generated skills ask before every commit and never push.
+
+```bash
+python3 scripts/forge.py scan ~/code      # read-only report
+```
+
 ## What a lobe repo looks like
 
 ```
 raw/            sources, append-only
 wiki/           pages + index.md + log.md
 wiki_tool.py    search, links, sections, index-add, lint, build (stdlib Python)
+wikictl         wrapper that points wiki_tool.py at this lobe's folders
 LOBE.md         page format and rules
 skills/         <name>-add-raw, -ingest, -ask, -lint
 ```

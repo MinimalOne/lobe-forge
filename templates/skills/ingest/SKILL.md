@@ -19,23 +19,25 @@ allowed-tools:
 
 Ingest a raw source into the **{{NAME}}** lobe. Purpose: {{PURPOSE}}
 
+**Git**: {{COMMIT_RULE}}
+
 ## Paths
 
 `SKILL_BASE_DIR` is the path shown in the `Base directory for this skill:` header. Shell
 variables do not persist between Bash calls — start every Bash command with:
 
 ```bash
-REPO=$(cd -P "${SKILL_BASE_DIR}/../.." && pwd); TOOL="$REPO/wiki_tool.py"
+W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 ```
 
-Page format and rules: `$REPO/LOBE.md` (read it once per session if unsure).
+Page format and rules: `$LOBE/LOBE.md` (read it once per session if unsure).
 
-> **Rules**: never modify `raw/`. Never read `wiki/index.md` or `wiki/log.md` whole — use
+> **Rules**: never modify `{{RAW}}/`. Never read `{{WIKI}}/index.md` or `{{WIKI}}/log.md` whole — use
 > `search`, `index-add` and `>>`.
 
 ## Inputs
 
-- **Source**: a path in `raw/` (if missing, list `raw/` and ask with `AskUserQuestion`).
+- **Source**: a path in `{{RAW}}/` (if missing, list `{{RAW}}/` and ask with `AskUserQuestion`).
   Markdown, text, PDF, images and docs are all read with `Read`; read large files in sections.
 
 ## Workflow
@@ -57,13 +59,13 @@ Read it in full. For images, describe what is shown and transcribe any text.
    Note each candidate's slug and aliases (nicknames, abbreviations, other spellings).
 2. **Search once per candidate**, names and aliases as alternation:
    ```bash
-   REPO=$(cd -P "${SKILL_BASE_DIR}/../.." && pwd); TOOL="$REPO/wiki_tool.py"
-   python3 "$TOOL" search "grandma|oma|maria" --limit 5
+   W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+   "$W" search "grandma|oma|maria" --limit 5
    ```
 3. **Same, not related**: a candidate maps to an existing page only if both are the **same**
    thing. Different people, years, versions or sibling projects are separate pages. In doubt,
    don't merge — propose a new page that links to the related one.
-4. **Read every matched page in full.** `python3 "$TOOL" links <page>` shows neighbours with
+4. **Read every matched page in full.** `"$W" links <page>` shows neighbours with
    summaries without opening them.
 
 ### Step 3 — Plan, then wait
@@ -74,8 +76,8 @@ right, or whether to record both). End with "Does this look right?" and wait.
 
 ### Step 4 — Write pages
 
-- **Summary page** `wiki/<source-slug>.md` and **concept pages**: format from `LOBE.md`;
-  `sources: [raw/<file>]`, `source_count: 1`, `last_updated: today`, 15–40-word `summary`.
+- **Summary page** `{{WIKI}}/<source-slug>.md` and **concept pages**: format from `LOBE.md`;
+  `sources: [{{RAW}}/<file>]`, `source_count: 1`, `last_updated: today`, 15–40-word `summary`.
 - **Existing pages**: targeted `Edit` calls only, never a full rewrite or removal. In the same
   edit append the source to `sources:`, bump `source_count`, set `last_updated`.
 - **Conflicts**: apply the user's decision; when the source supersedes a claim, update it and
@@ -92,8 +94,8 @@ close to its wording; no filler; keep claims scoped (who said it, when, where); 
 - Summary page ↔ each concept page; concept pages → related pages.
 - Pages that mention a new concept without linking it, found by grep, not by reading:
   ```bash
-  REPO=$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)
-  cd "$REPO/wiki" && grep -liE 'name|alias' *.md | grep -v -e '^index.md$' -e '^log.md$' -e '^<page>.md$' \
+  W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+  cd "$WIKI" && grep -liE 'name|alias' *.md | grep -v -e '^index.md$' -e '^log.md$' -e '^<page>.md$' \
     | xargs grep -L '\[\[<page>\]\]'
   ```
   `grep -n` each hit, `Read` only that region, `Edit` the mention into `[[<page>]]`.
@@ -101,26 +103,26 @@ close to its wording; no filler; keep claims scoped (who said it, when, where); 
 ### Step 6 — Index, log, lint, commit
 
 ```bash
-REPO=$(cd -P "${SKILL_BASE_DIR}/../.." && pwd); TOOL="$REPO/wiki_tool.py"
-python3 "$TOOL" sections
-python3 "$TOOL" index-add --section "<Section>" --page <page> --description "<≤25 words>"   # per new page
-cat >> "$REPO/wiki/log.md" <<'LOG'
+W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+"$W" sections
+"$W" index-add --section "<Section>" --page <page> --description "<≤25 words>"   # per new page
+cat >> "$WIKI/log.md" <<'LOG'
 
 ## <YYYY-MM-DD> — Ingest: <source-file>
 
 - Created: <pages>
 - Updated: <pages>
-- Source: `raw/<file>`
+- Source: `{{RAW}}/<file>`
 LOG
-python3 "$TOOL" lint --strict
+"$W" lint --strict
 ```
 
 No fitting section → ask the user; add it as a new `## <Section>` heading in `index.md`.
 Fix any hard lint error (broken link, frontmatter, missing source) before committing.
 
 ```bash
-REPO=$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)
-git -C "$REPO" add <each page created or edited> wiki/index.md wiki/log.md && \
+W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+git -C "$REPO" add <each page created or edited> {{WIKI}}/index.md {{WIKI}}/log.md && \
   git -C "$REPO" commit -q -m "wiki: ingest <source-slug> — <N> created, <M> updated"
 ```
 
@@ -129,8 +131,8 @@ Stage explicit paths only. Then ask whether to `git push`.
 ## Output
 
 ```
-Ingested: raw/<file>
-Created (N): wiki/a.md, …
-Updated (M): wiki/b.md, …
+Ingested: {{RAW}}/<file>
+Created (N): {{WIKI}}/a.md, …
+Updated (M): {{WIKI}}/b.md, …
 Lint: clean · Committed: <hash>
 ```

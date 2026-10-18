@@ -17,24 +17,26 @@ allowed-tools:
 
 Answer questions using the **{{NAME}}** lobe. Purpose: {{PURPOSE}}
 
+**Git**: {{COMMIT_RULE}}
+
 ## Paths
 
 `SKILL_BASE_DIR` is the path shown in the `Base directory for this skill:` header. Shell
 variables do not persist between Bash calls — start every Bash command with:
 
 ```bash
-REPO=$(cd -P "${SKILL_BASE_DIR}/../.." && pwd); TOOL="$REPO/wiki_tool.py"
+W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 ```
 
 | Command | Purpose |
 |---|---|
-| `python3 "$TOOL" search <term> [<term> …]` | Ranked pages with summary + snippet |
-| `python3 "$TOOL" links <page>` | Outgoing links with summaries, and inbound links |
-| `python3 "$TOOL" sections` / `index-add` | Index sections / insert an index row |
+| `"$W" search <term> [<term> …]` | Ranked pages with summary + snippet |
+| `"$W" links <page>` | Outgoing links with summaries, and inbound links |
+| `"$W" sections` / `index-add` | Index sections / insert an index row |
 
 ## Token budget
 
-Never read `wiki/index.md` or `wiki/log.md` whole. Read at most **5 pages** per question; if
+Never read `{{WIKI}}/index.md` or `{{WIKI}}/log.md` whole. Read at most **5 pages** per question; if
 that is not enough, say what is missing rather than reading more.
 
 ## Workflow
@@ -45,15 +47,15 @@ Split the question into 2–4 key concepts. Pass **one term per concept**, with 
 nicknames and spelling variants as regex alternation:
 
 ```bash
-REPO=$(cd -P "${SKILL_BASE_DIR}/../.." && pwd); TOOL="$REPO/wiki_tool.py"
-python3 "$TOOL" search "school|kindergarten|kita" "fees?|cost|price"
+W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+"$W" search "school|kindergarten|kita" "fees?|cost|price"
 ```
 
 Pages matching more terms rank higher; title, slug and alias matches outrank body matches.
 The summary and snippet per hit are often enough to rule a page in or out unopened.
 
-No hits → retry once with broader terms. Still none → `python3 "$TOOL" sections`, then
-`grep -n -A40 '^## <Section>' "$REPO/wiki/index.md"`.
+No hits → retry once with broader terms. Still none → `"$W" sections`, then
+`grep -n -A40 '^## <Section>' "$WIKI/index.md"`.
 
 ### Step 2 — Read the best pages
 
@@ -62,7 +64,7 @@ over 200 lines, grep for the relevant heading and read only that section with `o
 
 ### Step 3 — Follow links only when needed
 
-`python3 "$TOOL" links <page>` — open a linked page only if its summary says it holds a fact
+`"$W" links <page>` — open a linked page only if its summary says it holds a fact
 the answer still lacks.
 
 ### Step 4 — Answer
@@ -77,14 +79,14 @@ the answer still lacks.
 ### Step 5 — Offer to save
 
 If the answer combines several pages or will recur, offer to save it as
-`wiki/<name>.md` (format in `$REPO/LOBE.md`; put "Synthesized from wiki pages: a, b" in
+`{{WIKI}}/<name>.md` (format in `$LOBE/LOBE.md`; put "Synthesized from wiki pages: a, b" in
 `provenance`). Then, without reading the index or log:
 
 ```bash
-REPO=$(cd -P "${SKILL_BASE_DIR}/../.." && pwd); TOOL="$REPO/wiki_tool.py"
-python3 "$TOOL" index-add --section "<Section>" --page <name> --description "<≤25 words>"
-printf '\n## %s — Ask: %s\n\n- Created: %s\n' "$(date +%F)" "<question, short>" "<name>" >> "$REPO/wiki/log.md"
-git -C "$REPO" add wiki/<name>.md wiki/index.md wiki/log.md && git -C "$REPO" commit -q -m "wiki: save answer <name>"
+W="$(cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+"$W" index-add --section "<Section>" --page <name> --description "<≤25 words>"
+printf '\n## %s — Ask: %s\n\n- Created: %s\n' "$(date +%F)" "<question, short>" "<name>" >> "$WIKI/log.md"
+git -C "$REPO" add {{WIKI}}/<name>.md {{WIKI}}/index.md {{WIKI}}/log.md && git -C "$REPO" commit -q -m "wiki: save answer <name>"
 ```
 
 ## Output

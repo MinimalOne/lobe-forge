@@ -48,20 +48,37 @@ install into. Restart Claude Code, then feed it a source:
 /personal-ask what did that article say about X?
 ```
 
-## Everyday tasks
+## Examples
 
-Ask `/lobe-forge`:
+### Manage lobes with `/lobe-forge`
 
 | You want to | Say |
 |---|---|
-| Turn existing `wiki/` or `llmwiki/` folders into lobes | `/lobe-forge adopt the wikis in ~/code` |
+| Create a lobe from scratch, in a new repo | `/lobe-forge create a family lobe for kids' school, health and holidays` |
+| Add a lobe to a repo you already have | `/lobe-forge create a lobe in ~/code/my-project` |
+| Find existing `wiki/` or `llmwiki/` folders | `/lobe-forge scan ~/code` (pick none to only look) |
+| Turn existing wikis into lobes | `/lobe-forge adopt the wikis in ~/code` |
 | Set up a lobe you cloned on another machine | `/lobe-forge install the lobe I cloned to ~/lobes/personal` |
-| Get new templates after updating the plugin | `/lobe-forge upgrade my lobes` |
+| Get new templates for one lobe, or all | `/lobe-forge upgrade the personal lobe` · `/lobe-forge upgrade my lobes` |
+| Move an adopted lobe into its own repo | `/lobe-forge move the team-notes lobe to ~/lobes/team-notes` |
 | Remove a lobe's skills | `/lobe-forge uninstall the personal lobe` |
+| Remove an adopted lobe and its generated files | `/lobe-forge uninstall the team-notes lobe and delete its home` |
 
-Wikis in repos you don't own (e.g. an employer org) are adopted **externally**: nothing is
-written into the repo, and the skills never push. lobe-forge only overwrites or deletes files
-it generated, never wiki pages or sources, and shows a dry run first.
+When a lobe is created, `/lobe-forge` offers to publish it as a **private** GitHub repo, and only
+when the content is yours. Wikis in repos you don't own (e.g. an employer org) are adopted
+**externally**: nothing is written into the repo, and the skills never push. lobe-forge only
+overwrites or deletes files it generated, never wiki pages or sources, and shows a dry run first.
+
+### Use a lobe (here named `personal`)
+
+| You want to | Say |
+|---|---|
+| Save a web page | `/personal-add-raw https://example.com/article` |
+| Save a file (PDF, image, doc) | `/personal-add-raw ~/Downloads/lease.pdf` |
+| Save a note | `/personal-add-raw dentist says next check-up in March` |
+| Turn a saved source into wiki pages | `/personal-ingest raw/lease.pdf` |
+| Ask, with citations (good answers can be saved as pages) | `/personal-ask when does the lease end?` |
+| Check the wiki: format, links, index, stale pages, contradictions | `/personal-lint` |
 
 See [docs/usage.md](docs/usage.md) for the lobe layout, what each task does, and the
 underlying `forge.py` commands.

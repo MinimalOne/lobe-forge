@@ -5,7 +5,6 @@ wiki_tool.py — deterministic CLI for a lobe (LLM wiki) repo.
 Commands:
   build        Parse all wiki pages and write catalog.jsonl
   lint         Run deterministic quality checks (exits 0=ok, 1=issues found)
-  source-scan  Show raw sources not yet ingested
   search       Rank pages for one or more terms (title/alias/summary/body), with snippets
   links        Show a page's outgoing links (with summaries) and inbound links
   sections     List index.md section headings
@@ -25,7 +24,6 @@ Checks run by lint:
 """
 
 import argparse
-import datetime
 import json
 import os
 import re
@@ -36,7 +34,6 @@ REPO    = Path(os.environ.get("WIKI_ROOT") or Path(__file__).parent)
 WIKI    = REPO / os.environ.get("WIKI_DIR", "wiki")
 RAW     = REPO / os.environ.get("WIKI_RAW_DIR", "raw")
 CATALOG = Path(os.environ.get("WIKI_CATALOG") or REPO / "catalog.jsonl")
-MANIFEST = REPO / "source-manifest.jsonl"
 INDEX   = WIKI / "index.md"
 SKIP    = {"index.md", "log.md"}
 
@@ -350,41 +347,6 @@ def cmd_lint(args) -> int:
     return 1
 
 
-# ── source-scan ───────────────────────────────────────────────────────────────
-
-def cmd_source_scan(args) -> int:
-    if not MANIFEST.exists():
-        print("source-manifest.jsonl not found.", file=sys.stderr)
-        return 1
-
-    rows = [json.loads(l) for l in MANIFEST.read_text().splitlines() if l.strip()]
-    today = datetime.date.today()
-
-    display = rows if args.all else [r for r in rows if not r["ingested"]]
-
-    if not display:
-        print("All sources have been ingested.")
-        return 0
-
-    col_w = max(len(r["path"]) for r in display) + 2
-    print(f"  {'STATUS':<10} {'DAYS':>5}  PATH")
-    print(f"  {'-'*10} {'-'*5}  {'-'*(col_w)}")
-    for r in display:
-        status = "ingested" if r["ingested"] else "PENDING"
-        added  = r.get("added") or ""
-        try:
-            age = (today - datetime.date.fromisoformat(added)).days
-            age_s = f"{age}d"
-        except ValueError:
-            age_s = "?"
-        print(f"  {status:<10} {age_s:>5}  {r['path']}")
-
-    pending = sum(1 for r in rows if not r["ingested"])
-    if not args.all:
-        print(f"\n  Pending: {pending} of {len(rows)} sources")
-    return 0
-
-
 # ── search / links / sections / index-add ─────────────────────────────────────
 
 def _compile(term: str) -> re.Pattern:
@@ -593,9 +555,6 @@ def main():
         help="Exit 1 only for hard errors (C, G-data, H); treat legacy/orphan/index as warnings",
     )
 
-    scan_p = sub.add_parser("source-scan", help="Show raw sources not yet ingested")
-    scan_p.add_argument("--all", action="store_true", help="Show all sources including ingested")
-
     search_p = sub.add_parser("search", help="Rank pages for one or more terms (regex, case-insensitive)")
     search_p.add_argument("terms", nargs="+", help="One term per concept; aliases as alternation, e.g. 'eks|kubernetes'")
     search_p.add_argument("--limit", type=int, default=8)
@@ -618,8 +577,6 @@ def main():
         sys.exit(cmd_build(args))
     elif args.command == "lint":
         sys.exit(cmd_lint(args))
-    elif args.command == "source-scan":
-        sys.exit(cmd_source_scan(args))
     else:
         sys.exit({"search": cmd_search, "links": cmd_links, "sections": cmd_sections,
                   "index-add": cmd_index_add, "convert-legacy": cmd_convert_legacy}[args.command](args))

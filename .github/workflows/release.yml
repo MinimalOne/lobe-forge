@@ -1,0 +1,41 @@
+name: release
+
+# On each push to main: release plugin.json's version if it was bumped by hand, otherwise bump it
+# from conventional commits on shipped files (see scripts/release.py), then tag and publish.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency: release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main  # not the pushed sha: a queued run must see the previous run's release commit
+          fetch-depth: 0
+
+      - run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - run: python3 test_forge.py
+
+      - id: next
+        run: python3 scripts/release.py --notes "$RUNNER_TEMP/notes.md" >> "$GITHUB_OUTPUT"
+
+      - if: steps.next.outputs.version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.next.outputs.version }}
+        run: |
+          if ! git diff --quiet; then
+            git commit -qam "chore: release v$V"
+            git push origin HEAD:main
+          fi
+          gh release create "v$V" --target "$(git rev-parse HEAD)" --title "v$V" --notes-file "$RUNNER_TEMP/notes.md"

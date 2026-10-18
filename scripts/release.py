@@ -8,7 +8,7 @@ otherwise it prints nothing.
 
   plugin.json bumped by hand past the last v* tag  ->  release that version
   otherwise, conventional commits since the last tag that touch shipped files:
-    type!: or BREAKING CHANGE  ->  major     feat:  ->  minor     fix: / perf:  ->  patch
+    type!: or BREAKING CHANGE  ->  major     feat:  ->  minor     fix: perf: refactor: docs:  ->  patch
 """
 
 import argparse
@@ -42,7 +42,7 @@ def bump(version: str, commits: list[tuple[str, str]]) -> str | None:
             level = max(level, 3)
         elif m.group(1) == "feat":
             level = max(level, 2)
-        elif m.group(1) in ("fix", "perf"):
+        elif m.group(1) in ("fix", "perf", "refactor", "docs"):
             level = max(level, 1)
     if not level:
         return None

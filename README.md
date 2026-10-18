@@ -119,7 +119,7 @@ and only what forge itself made — never wiki pages or sources.
 Each push to `main` runs `.github/workflows/release.yml`. If `.claude-plugin/plugin.json` was
 bumped by hand past the last `v*` tag, that version is released. Otherwise
 [conventional commits](https://www.conventionalcommits.org) since the last tag that touch
-`skills/`, `scripts/` or `templates/` pick the bump: `feat:` minor, `fix:`/`perf:` patch,
+`skills/`, `scripts/` or `templates/` pick the bump: `feat:` minor, `fix:`/`perf:`/`refactor:`/`docs:` patch,
 `type!:` or `BREAKING CHANGE` major; other types release nothing. The workflow writes the
 version into `plugin.json` and `skills/lobe-forge/SKILL.md`, commits, tags and publishes a
 GitHub release.

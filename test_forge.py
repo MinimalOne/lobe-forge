@@ -310,7 +310,8 @@ with tempfile.TemporaryDirectory() as d:
 # release.py: the highest conventional-commit level since the last tag wins
 sys.path.insert(0, str(FORGE.parent))
 from release import bump
-assert bump("1.4.2", [("docs: x", ""), ("chore: y", "")]) is None
+assert bump("1.4.2", [("chore: x", ""), ("ci: y", "")]) is None
+assert bump("1.4.2", [("docs: x", "")]) == bump("1.4.2", [("refactor: x", "")]) == "1.4.3"
 assert bump("1.4.2", [("fix: x", ""), ("docs: y", "")]) == "1.4.3"
 assert bump("1.4.2", [("fix(scan): x", ""), ("feat: y", "")]) == "1.5.0"
 assert bump("1.4.2", [("feat!: x", "")]) == bump("1.4.2", [("fix: x", "BREAKING CHANGE: y")]) == "2.0.0"

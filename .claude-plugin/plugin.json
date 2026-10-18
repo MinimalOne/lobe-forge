@@ -1,5 +1,5 @@
 {
   "name": "lobe-forge",
   "description": "Create git-backed LLM wikis (lobes) with their own named skills: <name>-add-raw, -ingest, -ask, -lint",
-  "version": "1.4.0"
+  "version": "1.4.1"
 }

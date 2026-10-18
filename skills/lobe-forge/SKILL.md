@@ -183,7 +183,8 @@ External lobe: the home is not versioned — rerun `create` with the same name, 
 
 Lobes keep the tooling they were created with. After lobe-forge changes, re-render a lobe's
 generated files (`wiki_tool.py`, `wikictl`, `LOBE.md`, `skills/<name>-{add-raw,ingest,ask,lint}/SKILL.md`;
-other skills in `skills/` are never touched):
+other skills in `skills/`, and forge skills rewritten by hand so they no longer run
+`wikictl`, are never touched):
 
 ```bash
 FORGE="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/scripts/forge.py"

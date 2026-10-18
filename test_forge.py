@@ -254,7 +254,7 @@ with tempfile.TemporaryDirectory() as d:
     (cfg / "skills" / "own-lint").unlink()
     (own / "skills" / "own-custom").mkdir()
     (own / "skills" / "own-custom" / "SKILL.md").write_text("mine")
-    ask.write_text("# old\n")
+    ask.write_text("# old: runs wikictl\n")
     commit(own)
     kdb = git_repo(d / "src3" / "kdb", {"wiki/index.md": "# I\n"})
     assert run("create", "--name", "kdb", "--purpose", "x", "--repo", str(kdb))[0] == 0
@@ -264,17 +264,20 @@ with tempfile.TemporaryDirectory() as d:
     (kdb / "skills" / "kdb-build").mkdir()
     (kdb / "skills" / "kdb-build" / "SKILL.md").write_text("custom")
     assert run("install", "--repo", str(kdb), "--target", str(cfg), home=d)[0] == 0
+    (kdb / "skills" / "kdb-ask" / "SKILL.md").write_text("hand-written ask")
 
     code, out = run("upgrade", "--all", home=d)  # dry run
-    assert code == 0 and f"Lobe 'kdb' (in place) at {kdb.resolve()}\nUp to date" in out, out
+    assert code == 0 and (f"Lobe 'kdb' (in place) at {kdb.resolve()}\n"
+                          "  keep    skills/kdb-ask/SKILL.md (hand-written: does not run wikictl)\nUp to date") in out, out
     assert "update  skills/own-ask/SKILL.md" in out and f"link    {cfg}/skills/own-lint" in out, out
-    assert not (cfg / "skills" / "own-lint").exists() and ask.read_text() == "# old\n"
+    assert not (cfg / "skills" / "own-lint").exists() and ask.read_text() == "# old: runs wikictl\n"
     assert run("upgrade", "--all", "--origin", "x", home=d)[0] == 1
     code, out = run("upgrade", "--all", "--apply", home=d)
     assert code == 0 and "Upgraded 1 file(s)" in out and (cfg / "skills" / "own-lint").is_symlink(), out
     assert ask.read_text() == fresh["skills/own-ask/SKILL.md"]
     assert (own / "skills" / "own-custom" / "SKILL.md").read_text() == "mine"
     assert (kdb / "skills" / "kdb-build" / "SKILL.md").read_text() == "custom"
+    assert (kdb / "skills" / "kdb-ask" / "SKILL.md").read_text() == "hand-written ask"
     commit(own)
     assert "Up to date" in run("upgrade", "--all", home=d)[1]
 

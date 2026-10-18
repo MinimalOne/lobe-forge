@@ -398,6 +398,10 @@ def upgrade_lobe(lobe: Path, apply: bool, origin: str | None = None) -> int:
     files = generated_files(*settings)
     stale = [rel for rel, (text, _) in files.items()
              if not (lobe / rel).is_file() or (lobe / rel).read_text() != text]
+    # a forge skill rewritten by hand (it no longer runs wikictl) belongs to the user now
+    kept = [rel for rel in stale if rel.startswith("skills/") and (lobe / rel).is_file()
+            and "wikictl" not in (lobe / rel).read_text()]
+    stale = [rel for rel in stale if rel not in kept]
     # forge's own skills missing from a Claude dir that already has this lobe installed
     targets = [t for t in candidate_targets() if links_to(lobe, t)]
     unlinked = {t: missing for t in targets
@@ -405,6 +409,8 @@ def upgrade_lobe(lobe: Path, apply: bool, origin: str | None = None) -> int:
                                 if not (t / "skills" / f"{name}-{k}").exists()
                                 and not (t / "skills" / f"{name}-{k}").is_symlink()])}
     say(f"Lobe '{name}' ({'external home' if external else 'in place'}) at {lobe}")
+    for rel in kept:
+        say(f"  keep    {rel} (hand-written: does not run wikictl)")
     if not stale and not unlinked:
         say("Up to date with this lobe-forge's templates.")
         return 0

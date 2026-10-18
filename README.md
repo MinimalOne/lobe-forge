@@ -82,7 +82,8 @@ python3 scripts/forge.py upgrade --all [--apply]                       # every i
 ```
 
 `--all` finds lobes from the skill links in your Claude config dirs. Other skills in a lobe's
-`skills/` (your own, not forge's) are never touched. A forge skill the lobe lacks in a Claude dir
+`skills/` (your own, not forge's) are never touched, nor is a forge skill you rewrote by
+hand (one that no longer runs `wikictl`). A forge skill the lobe lacks in a Claude dir
 that already has the lobe installed (a new skill kind) is linked there too.
 
 Name, purpose, folders and origin are read back from the lobe itself. Wiki pages and sources are

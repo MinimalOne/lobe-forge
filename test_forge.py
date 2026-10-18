@@ -281,6 +281,14 @@ with tempfile.TemporaryDirectory() as d:
     commit(own)
     assert "Up to date" in run("upgrade", "--all", home=d)[1]
 
+    # all four forge skills hand-written: the lobe owns its tooling, so wiki_tool.py and LOBE.md stay
+    for k in ["add-raw", "ingest", "lint"]:
+        (kdb / "skills" / f"kdb-{k}" / "SKILL.md").write_text(f"hand-written {k}")
+    (kdb / "wiki_tool.py").write_text("# extra commands\n")
+    code, out = run("upgrade", "--repo", str(kdb), "--apply", home=d)
+    assert code == 0 and "every forge skill is hand-written" in out and "Upgraded" not in out, out
+    assert (kdb / "wiki_tool.py").read_text() == "# extra commands\n"
+
     # uninstall: links only, everywhere they point into this lobe; --purge only for external homes
     code, out = run("uninstall", "--repo", str(own), "--purge", "--target", str(claude))
     assert code == 1 and "external homes only" in out and (claude / "skills" / "own-ask").is_symlink(), out

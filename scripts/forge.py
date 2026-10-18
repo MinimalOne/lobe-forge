@@ -409,6 +409,10 @@ def upgrade_lobe(lobe: Path, apply: bool, origin: str | None = None) -> int:
                                 if not (t / "skills" / f"{name}-{k}").exists()
                                 and not (t / "skills" / f"{name}-{k}").is_symlink()])}
     say(f"Lobe '{name}' ({'external home' if external else 'in place'}) at {lobe}")
+    # every forge skill hand-written: the lobe runs its own tooling (e.g. a wiki_tool.py with extra commands)
+    if len(kept) == len(KINDS):
+        say("  keep    all files (every forge skill is hand-written, so this lobe manages its own tooling)")
+        return 0
     for rel in kept:
         say(f"  keep    {rel} (hand-written: does not run wikictl)")
     if not stale and not unlinked:

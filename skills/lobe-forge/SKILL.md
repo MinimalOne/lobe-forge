@@ -5,9 +5,11 @@ description: |
   idea) — with its own named skills: <name>-add-raw, <name>-ingest, <name>-ask, <name>-lint.
   Asks for the lobe name, its purpose, whether to create a new repo or use an existing one, and
   which Claude installations to install into. Scans the given folder for existing llmwiki/ or
-  wiki/ folders and offers to adopt them as named lobes. Also re-installs a lobe on a new machine.
+  wiki/ folders and offers to adopt them as named lobes. Also re-installs a lobe on a new machine,
+  upgrades lobes to the current templates, and uninstalls a lobe.
   Trigger phrases: "/lobe-forge", "create a lobe", "new lobe", "forge a lobe",
-  "new second brain wiki", "create wiki skills for", "install my lobe", "adopt my llmwiki".
+  "new second brain wiki", "create wiki skills for", "install my lobe", "adopt my llmwiki",
+  "upgrade my lobes", "uninstall a lobe".
 version: 1.4.2
 allowed-tools:
   - Bash

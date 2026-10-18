@@ -9,6 +9,8 @@ A Claude Code plugin that creates **lobes**: git-backed LLM wikis, one per purpo
 family, career, an idea), each with its own skills named after it. Unlike single-wiki tools, it
 keeps topics apart, adopts wikis you already have, and upgrades without touching your pages.
 
+![Demo: create a lobe, add Karpathy's LLM wiki gist, ingest it, ask a question](docs/demo.gif)
+
 ```
 /lobe-forge  →  name: personal
              →  /personal-add-raw   save a URL, file (PDF, image, doc) or text into raw/

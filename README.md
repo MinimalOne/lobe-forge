@@ -6,7 +6,8 @@
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](https://docs.claude.com/en/docs/claude-code/plugins)
 
 A Claude Code plugin that creates **lobes**: git-backed LLM wikis, one per purpose (personal,
-family, career, an idea), each with its own skills named after it.
+family, career, an idea), each with its own skills named after it. Unlike single-wiki tools, it
+keeps topics apart, adopts wikis you already have, and upgrades without touching your pages.
 
 ```
 /lobe-forge  →  name: personal

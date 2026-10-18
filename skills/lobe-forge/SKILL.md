@@ -28,7 +28,8 @@ variables do not persist between Bash calls — start every Bash command with:
 FORGE="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/scripts/forge.py"
 ```
 
-All file work goes through `forge.py`; it never overwrites or deletes anything.
+All file work goes through `forge.py`. Only `upgrade --apply` overwrites and only `uninstall`
+deletes, and only what forge itself made — never wiki pages or sources.
 
 ## Workflow
 

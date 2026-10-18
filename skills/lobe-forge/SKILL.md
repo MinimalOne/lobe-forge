@@ -8,7 +8,7 @@ description: |
   wiki/ folders and offers to adopt them as named lobes. Also re-installs a lobe on a new machine.
   Trigger phrases: "/lobe-forge", "create a lobe", "new lobe", "forge a lobe",
   "new second brain wiki", "create wiki skills for", "install my lobe", "adopt my llmwiki".
-version: 1.1.0
+version: 1.4.2
 allowed-tools:
   - Bash
   - AskUserQuestion

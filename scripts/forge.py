@@ -8,7 +8,8 @@ Commands:
   create    Create a lobe, or adopt an existing wiki, and symlink its skills into Claude
   install   Symlink an existing lobe's skills into Claude installations (e.g. a fresh clone)
   upgrade   Re-render a lobe's generated files from the current templates (--all: every installed
-            lobe) and link forge skills missing from Claude dirs that already have the lobe
+            lobe) and link forge skills missing from Claude dirs that already have the lobe.
+            Keeps forge skills rewritten by hand; keeps every file if all four are
   uninstall Remove a lobe's skill links (and, with --purge, an external home's generated files)
 
 Two modes for create:

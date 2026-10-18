@@ -150,6 +150,52 @@ with tempfile.TemporaryDirectory() as d:
                "--wiki-dir", "llmwiki", "--raw-dir", "docs")[0] == 1
     assert run("create", "--name", "z", "--purpose", "x", "--repo", str(work), "--home", str(d / "h2"))[0] == 1
 
+    # upgrade: an in-place lobe built from older templates
+    def commit(path):
+        subprocess.run(["git", "-C", str(path), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(path), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "c"], check=True)
+
+    fresh = {rel: (own / rel).read_text() for rel in ["wiki_tool.py", "wikictl", "LOBE.md", "skills/own-ask/SKILL.md"]}
+    (own / "wiki_tool.py").write_text("# old\n")
+    ask = own / "skills" / "own-ask" / "SKILL.md"
+    ask.write_text(ask.read_text().replace("builtin cd -P", "cd -P"))
+    (own / "skills" / "own-lint" / "SKILL.md").unlink()  # a skill kind added in a later release
+    commit(own)
+    pages = {p.name: p.read_text() for p in (own / "llmwiki").glob("*.md")}
+
+    code, out = run("upgrade", "--repo", str(own))  # dry run
+    assert code == 0 and "update  wiki_tool.py" in out and "update  skills/own-ask/SKILL.md" in out, out
+    assert "add     skills/own-lint/SKILL.md" in out and "LOBE.md" not in out, out
+    assert (own / "wiki_tool.py").read_text() == "# old\n"
+
+    (own / "wiki_tool.py").write_text("# local edit\n")  # uncommitted edit blocks the overwrite
+    code, out = run("upgrade", "--repo", str(own), "--apply")
+    assert code == 1 and "commit or stash" in out and (own / "wiki_tool.py").read_text() == "# local edit\n", out
+    subprocess.run(["git", "-C", str(own), "checkout", "-q", "--", "wiki_tool.py"], check=True)
+
+    code, out = run("upgrade", "--repo", str(own), "--apply")
+    assert code == 0 and "Upgraded 3 file(s)" in out and "New skills added" in out, out
+    for rel, text in fresh.items():
+        assert (own / rel).read_text() == text, rel
+    assert os.access(own / "wiki_tool.py", os.X_OK)
+    assert (own / "skills" / "own-lint" / "SKILL.md").is_file()
+    assert {p.name: p.read_text() for p in (own / "llmwiki").glob("*.md")} == pages  # wiki untouched
+    assert "Up to date" in run("upgrade", "--repo", str(own))[1]
+
+    # upgrade: external home keeps a .bak (it is not in git); the wiki repo stays clean
+    tool = home / "wiki_tool.py"
+    tool.write_text("# old\n")
+    code, out = run("upgrade", "--repo", str(home), "--apply")
+    assert code == 0 and "external home" in out and (home / "wiki_tool.py.bak").read_text() == "# old\n", out
+    assert tool.read_text() == fresh["wiki_tool.py"]
+    assert f"REPO='{work.resolve()}'" in sh(f'"{home}/wikictl" paths').stdout  # still external, not "."
+    assert subprocess.run(["git", "-C", str(work), "status", "--porcelain"], capture_output=True, text=True).stdout == ""
+
+    # upgrade refuses what it cannot read back
+    assert run("upgrade", "--repo", str(d / "src"))[0] == 1
+    code, out = run("upgrade", "--repo", str(repo))  # LOBE.md was hand-edited to "edited" above
+    assert code == 1 and "purpose" in out, out
+
     # install mode works for both kinds of lobe
     for lobe, skill in [(repo, "personal-ingest"), (home, "work-wiki-ask")]:
         code, out = run("install", "--repo", str(lobe), "--target", str(d / "other"))

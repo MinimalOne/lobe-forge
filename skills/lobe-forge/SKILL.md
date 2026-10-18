@@ -158,3 +158,18 @@ python3 "$FORGE" install --repo "<path>" --target ~/.claude
 
 External lobe: the home is not versioned — rerun `create` with the same name, `--repo`,
 `--wiki-dir`, `--raw-dir` and `--home` to regenerate it.
+
+## Upgrade an existing lobe
+
+Lobes keep the tooling they were created with. After lobe-forge changes, re-render a lobe's
+generated files (`wiki_tool.py`, `wikictl`, `LOBE.md`, `skills/<name>-*/SKILL.md`):
+
+```bash
+FORGE="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/scripts/forge.py"
+python3 "$FORGE" upgrade --repo "<lobe repo or home>"            # dry run
+python3 "$FORGE" upgrade --repo "<lobe repo or home>" --apply    # on a yes
+```
+
+Show the dry run and ask before `--apply`. In place it refuses while those files have
+uncommitted changes; afterwards show `git -C "<path>" diff --stat` and commit with the paths it
+printed. An external home gets `*.bak` copies. If it reports new skills, run `install`.

@@ -7,13 +7,15 @@ Commands:
   scan      Find existing LLM wikis (llmwiki/ or wiki/ with an index.md) under a directory
   create    Create a lobe, or adopt an existing wiki, and symlink its skills into Claude
   install   Symlink an existing lobe's skills into Claude installations (e.g. a fresh clone)
+  upgrade   Re-render an existing lobe's generated files from the current templates
 
 Two modes for create:
   in place  (default)   lobe files (skills/, wikictl, wiki_tool.py, LOBE.md) go into the repo
   external  (--home D)  lobe files go into D, with D/repo -> the wiki repo; the repo is not touched
 
 Re-running create is safe: existing files are kept, only missing pieces are added. Nothing is
-ever overwritten or deleted.
+deleted. Only `upgrade --apply` overwrites, and only the generated files (wiki_tool.py, wikictl,
+LOBE.md, skills/<name>-*/SKILL.md) — never wiki pages or sources.
 """
 
 import argparse
@@ -85,6 +87,36 @@ def render(text: str, **values: str) -> str:
     for k, v in values.items():
         text = text.replace("{{" + k + "}}", v)
     return text
+
+
+def generated_files(name: str, purpose: str, wiki_dir: str, raw_dir: str, external: bool) -> dict[str, tuple[str, int | None]]:
+    """Every file forge renders into a lobe home: relative path -> (text, mode)."""
+    values = dict(NAME=name, PURPOSE=purpose, WIKI=wiki_dir, RAW=raw_dir,
+                  REPO_LINK="repo" if external else ".",
+                  COMMIT_RULE=COMMIT_EXTERNAL if external else COMMIT_IN_PLACE)
+    files = {
+        "wiki_tool.py": ((TEMPLATES / "wiki_tool.py").read_text(), 0o755),
+        "wikictl": (render((TEMPLATES / "wikictl").read_text(), **values), 0o755),
+        "LOBE.md": (render((TEMPLATES / "LOBE.md").read_text(), **values), None),
+    }
+    for kind in KINDS:
+        tpl = (TEMPLATES / "skills" / kind / "SKILL.md").read_text()
+        files[f"skills/{name}-{kind}/SKILL.md"] = (render(tpl, **values), None)
+    return files
+
+
+def lobe_settings(lobe: Path) -> tuple[str, str, str, str, bool] | str:
+    """(name, purpose, wiki_dir, raw_dir, external) read back from a generated lobe, or an error."""
+    asks = sorted(p.parent.name for p in lobe.glob("skills/*-ask/SKILL.md"))
+    if len(asks) != 1 or not (lobe / "wikictl").is_file() or not (lobe / "LOBE.md").is_file():
+        return f"{lobe} is not a lobe repo or lobe home (needs wikictl, LOBE.md and one skills/*-ask)"
+    purpose = re.search(r"^\*\*Purpose\*\*: (.+)$", (lobe / "LOBE.md").read_text(), re.MULTILINE)
+    wikictl = (lobe / "wikictl").read_text()
+    wiki = re.search(r'WIKI_DIR="([^"]+)"', wikictl)
+    raw = re.search(r'WIKI_RAW_DIR="([^"]+)"', wikictl)
+    if not (purpose and wiki and raw):
+        return f"cannot read the purpose from LOBE.md or the folders from wikictl in {lobe}"
+    return asks[0].removesuffix("-ask"), purpose.group(1).strip(), wiki.group(1), raw.group(1), (lobe / "repo").is_symlink()
 
 
 def candidate_targets() -> list[Path]:
@@ -214,9 +246,6 @@ def cmd_create(args) -> int:
         return fail(f"{lobe} already holds lobe '{other[0]}' — one lobe per repo or home")
 
     title = name.replace("-", " ").title()
-    values = dict(NAME=name, PURPOSE=purpose, WIKI=args.wiki_dir, RAW=args.raw_dir,
-                  REPO_LINK="repo" if external else ".",
-                  COMMIT_RULE=COMMIT_EXTERNAL if external else COMMIT_IN_PLACE)
     made: list[str] = []
 
     if external:
@@ -240,12 +269,8 @@ def cmd_create(args) -> int:
             gitignore.write_text("\n".join(lines + ["catalog.jsonl"]) + "\n")
             made.append(".gitignore (catalog.jsonl)")
 
-    write_new(lobe / "wiki_tool.py", (TEMPLATES / "wiki_tool.py").read_text(), made, lobe, 0o755)
-    write_new(lobe / "wikictl", render((TEMPLATES / "wikictl").read_text(), **values), made, lobe, 0o755)
-    write_new(lobe / "LOBE.md", render((TEMPLATES / "LOBE.md").read_text(), **values), made, lobe)
-    for kind in KINDS:
-        tpl = (TEMPLATES / "skills" / kind / "SKILL.md").read_text()
-        write_new(lobe / "skills" / f"{name}-{kind}" / "SKILL.md", render(tpl, **values), made, lobe)
+    for rel, (text, mode) in generated_files(name, purpose, args.wiki_dir, args.raw_dir, external).items():
+        write_new(lobe / rel, text, made, lobe, mode)
 
     say(f"\nLobe '{name}' ({'external home ' + str(lobe) if external else 'in place'}) for {repo}")
     say(f"  wiki: {args.wiki_dir}/   raw: {args.raw_dir}/")
@@ -266,6 +291,51 @@ def cmd_install(args) -> int:
         return fail(f"{lobe} has no wikictl + skills/*/SKILL.md — not a lobe repo or lobe home")
     say(f"Installing {', '.join(skills)}:")
     return link_skills(lobe, skills, [Path(t) for t in args.target])
+
+
+def cmd_upgrade(args) -> int:
+    lobe = Path(args.repo).expanduser().resolve()
+    settings = lobe_settings(lobe)
+    if isinstance(settings, str):
+        return fail(settings)
+    name, _, _, _, external = settings
+    files = generated_files(*settings)
+    stale = [rel for rel, (text, _) in files.items()
+             if not (lobe / rel).is_file() or (lobe / rel).read_text() != text]
+    say(f"Lobe '{name}' ({'external home' if external else 'in place'}) at {lobe}")
+    if not stale:
+        say("Up to date with this lobe-forge's templates.")
+        return 0
+    for rel in stale:
+        say(f"  {'update' if (lobe / rel).exists() else 'add   '}  {rel}")
+    if not args.apply:
+        say("\nDry run — rerun with --apply to write. Wiki pages and sources are never touched.")
+        return 0
+
+    if not external:
+        # the previous version must be in git, so an overwritten local edit can be recovered
+        dirty = git(lobe, "status", "--porcelain", "--", *stale)
+        if dirty:
+            return fail(f"uncommitted changes in files upgrade would overwrite — commit or stash first:\n{dirty}")
+    new_skills = [rel for rel in stale if rel.startswith("skills/") and not (lobe / rel).exists()]
+    for rel in stale:
+        path = lobe / rel
+        text, mode = files[rel]
+        if external and path.exists():
+            path.with_name(path.name + ".bak").write_bytes(path.read_bytes())  # home is not in git
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        if mode:
+            path.chmod(mode)
+    say(f"\nUpgraded {len(stale)} file(s).")
+    if external:
+        say("Previous versions saved next to them as *.bak.")
+    else:
+        say(f'Review and commit: git -C "{lobe}" diff --stat && git -C "{lobe}" add {" ".join(stale)} '
+            f'&& git -C "{lobe}" commit -m "lobe: upgrade {name} tooling"')
+    if new_skills:
+        say(f"New skills added — link them with: forge.py install --repo {lobe} --target <claude dir>")
+    return 0
 
 
 def main() -> None:
@@ -291,8 +361,13 @@ def main() -> None:
     i.add_argument("--repo", required=True, help="Lobe repo (in place) or lobe home (external)")
     i.add_argument("--target", action="append", required=True)
 
+    u = sub.add_parser("upgrade", help="Re-render a lobe's generated files from the current templates")
+    u.add_argument("--repo", required=True, help="Lobe repo (in place) or lobe home (external)")
+    u.add_argument("--apply", action="store_true", help="Write the files (default: dry run)")
+
     args = p.parse_args()
-    cmds = {"targets": cmd_targets, "scan": cmd_scan, "create": cmd_create, "install": cmd_install}
+    cmds = {"targets": cmd_targets, "scan": cmd_scan, "create": cmd_create, "install": cmd_install,
+            "upgrade": cmd_upgrade}
     sys.exit(cmds[args.command](args))
 
 

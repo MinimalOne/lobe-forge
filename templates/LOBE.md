@@ -13,7 +13,7 @@ sources and asks questions; Claude maintains the wiki through the `{{NAME}}-*` s
 {{WIKI}}/           wiki pages, one concept or entity per page
 {{WIKI}}/index.md   table of contents, grouped by ## sections
 {{WIKI}}/log.md     append-only operation log
-wikictl         wrapper: wiki_tool.py for this lobe (search, links, sections, index-add, lint, build, convert-legacy)
+wikictl         wrapper: wiki_tool.py for this lobe (search, links, sections, index-add, set-atoms, lint, build, convert-legacy)
 skills/         the {{NAME}}-add-raw / -ingest / -ask / -lint skills (symlinked into Claude)
 ```
 
@@ -34,6 +34,10 @@ title: Page Title
 summary: One sentence (15-40 words) saying what this page is.
 aliases:
   - Other Name
+atoms:
+  - "cmd: exact command that worked"
+  - "fix: exact error message -> how it was fixed"
+  - "decision: chose X over Y because Z"
 sources:
   - {{RAW}}/source-file.md
 source_count: 1
@@ -54,6 +58,7 @@ Content with [[wiki-links]] and (source: source-file.md) after factual claims.
 - `source_count` must equal the number of `sources` items.
 - `sources` lists files under `{{RAW}}/`; anything else (conversations, links not saved) goes in `provenance`.
 - `aliases` (optional) are other names for the same thing; search matches them.
+- `atoms` lists 2–5 high-signal facts, exact commands (`cmd:`), error fixes (`fix:`), explicit decisions (`decision: X because Y`), or natural search questions (`q:`) so `wikictl search` matches and prints them directly.
 - Page names: lowercase with hyphens. Index descriptions: 25 words or fewer.
 
 ## Rules

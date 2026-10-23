@@ -45,6 +45,7 @@ W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" path
 | C | Broken link — target page missing |
 | D | Index drift — index row without page, or page not in index |
 | H | `sources:` file missing from `{{RAW}}/` |
+| I | Missing `atoms:` — existing page not yet migrated to include atoms in frontmatter |
 
 ## Step 2 — Reasoning checks on candidates
 
@@ -79,10 +80,11 @@ python3 -c "import json,collections as C;m=C.defaultdict(list);[m[s].append(e['p
 ### C. Broken links (N)
 ### B. Orphans (N)
 ### D. Index (N)
+### I. Missing atoms (N)
 ### E. Possibly outdated (N)
 ### F. Contradictions (N)
 
-Total: N — fix G, C, H first, then B and D.
+Total: N — fix G, C, H first, then B, D and I.
 ```
 
 ## Step 4 — Offer fixes
@@ -100,6 +102,18 @@ git -C "$REPO" diff --stat -- "$WIKI"
 It moves the bold Summary/Sources/Last updated lines into frontmatter: files under `{{RAW}}/`
 become `sources`, everything else becomes `provenance`; the body is not touched. Fix skipped
 pages by hand, then append one line to `{{WIKI}}/log.md` with `cat >>`.
+
+**Migrate pages missing `atoms:` (I)**: to upgrade existing pages (including newly converted
+legacy pages) to the current format, take at most 10 pages flagged under `I` per run (offer to
+continue in a later run), read each, distill 2–5 high-signal
+atoms from its body (`cmd: <exact command>`, `fix: <exact error -> fix>`,
+`decision: <choice because reason>`, `fact: <key number/price/date>`, `q: <search question>`),
+and write them into frontmatter without manual YAML edits:
+
+```bash
+W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+"$W" set-atoms <page> "cmd: ..." "decision: ..." "fact: ..."
+```
 
 Then targeted `Edit`s only: recount `source_count`, move non-file sources to `provenance`, add
 missing index rows with `index-add`, add links to orphans from a related page. After fixing,

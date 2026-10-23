@@ -77,9 +77,12 @@ right, or whether to record both). End with "Does this look right?" and wait.
 ### Step 4 — Write pages
 
 - **Summary page** `{{WIKI}}/<source-slug>.md` and **concept pages**: format from `LOBE.md`;
-  `sources: [{{RAW}}/<file>]`, `source_count: 1`, `last_updated: today`, 15–40-word `summary`.
+  `sources: [{{RAW}}/<file>]`, `source_count: 1`, `last_updated: today`, 15–40-word `summary`,
+  and 2–5 `atoms:` (`cmd: <exact command>`, `fix: <exact error -> fix>`,
+  `decision: <why X was chosen>`, `fact: <key number/price/date>`, or `q: <question phrasing>`).
 - **Existing pages**: targeted `Edit` calls only, never a full rewrite or removal. In the same
-  edit append the source to `sources:`, bump `source_count`, set `last_updated`.
+  edit append the source to `sources:`, bump `source_count`, add or update relevant `atoms:`,
+  and set `last_updated`.
 - **Conflicts**: apply the user's decision; when the source supersedes a claim, update it and
   add a dated line under `## Contradictions / Updates`.
 - Create a page only for what the source substantively discusses; a one-sentence page belongs

@@ -234,6 +234,13 @@ with tempfile.TemporaryDirectory() as d:
     # multi-word phrase tokenization and --batch candidate search
     r_phrase = sh(f'"{own}/wikictl" search "window 02:00"')
     assert "[[cutover]]" in r_phrase.stdout, r_phrase.stdout
+    # phrase tokens are whole words without stopwords: "ip"/"the" must not hit "zip script ... other"
+    (own / "llmwiki" / "zip-notes.md").write_text(
+        '---\ntitle: "Zip notes"\nsummary: "Use the zip script to skip other files."\nsources: []\nsource_count: 0\n'
+        'provenance:\n  - "chat"\nlast_updated: 2026-10-01\n---\n\n# Zip notes\n\nHow to do it.\n')
+    r_noise = sh(f'"{own}/wikictl" search "how to reset the router ip"')
+    assert "[[zip-notes]]" not in r_noise.stdout, r_noise.stdout
+    (own / "llmwiki" / "zip-notes.md").unlink()
     r_batch = sh(f'"{own}/wikictl" search --batch "cutover|rollout" "holiday" "nonexistent-candidate" --limit 3')
     assert r_batch.returncode == 0, r_batch.stdout
     assert "=== query: cutover|rollout ===" in r_batch.stdout and "[[cutover]]" in r_batch.stdout, r_batch.stdout

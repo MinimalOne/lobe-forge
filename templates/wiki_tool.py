@@ -442,9 +442,14 @@ def _locate_match(full_text: str, body: str, rx: re.Pattern) -> str:
     return _one_line(body[max(0, m.start() - 70): m.end() + 70], 170) if m else ""
 
 
-def _expand_terms(raw_terms: list[str]) -> list[re.Pattern]:
-    """Compile each term; also split multi-word plain phrases into token patterns so non-contiguous matches rank."""
-    out: list[re.Pattern] = []
+_STOPWORDS = {"the", "and", "for", "how", "what", "why", "when", "where", "which", "who", "with",
+              "does", "did", "can", "are", "was", "not", "this", "that", "from", "into", "about", "you", "your"}
+
+
+def _expand_terms(raw_terms: list[str]) -> list[tuple[re.Pattern, bool]]:
+    """Compile each term as (pattern, is_concept); multi-word plain phrases also yield whole-word
+    token patterns (stopwords and <3 chars dropped) that rank but don't count as extra concepts."""
+    out: list[tuple[re.Pattern, bool]] = []
     seen: set[str] = set()
     for t in raw_terms:
         t = t.strip()
@@ -452,12 +457,12 @@ def _expand_terms(raw_terms: list[str]) -> list[re.Pattern]:
             continue
         if t.lower() not in seen:
             seen.add(t.lower())
-            out.append(_compile(t))
+            out.append((_compile(t), True))
         if " " in t and "|" not in t:
             for tok in re.findall(r"[\w-]+", t):
-                if len(tok) >= 2 and tok.lower() not in seen:
+                if len(tok) >= 3 and tok.lower() not in _STOPWORDS and tok.lower() not in seen:
                     seen.add(tok.lower())
-                    out.append(_compile(tok))
+                    out.append((re.compile(rf"\b{re.escape(tok)}\b", re.IGNORECASE), False))
     return out
 
 
@@ -470,7 +475,7 @@ def _rank_docs(docs: list[tuple], raw_terms: list[str], ref_date: datetime.date,
     k1, b = 1.5, 0.75
 
     idfs = []
-    for rx in terms:
+    for rx, _ in terms:
         df = sum(
             1 for slug, e, _, body, _, _ in docs
             if rx.search(slug)
@@ -486,7 +491,7 @@ def _rank_docs(docs: list[tuple], raw_terms: list[str], ref_date: datetime.date,
     for slug, e, full_text, body, dl, total_lines in docs:
         raw_score, matched, snippet = 0.0, 0, ""
         matched_atoms: list[str] = []
-        for rx, idf in zip(terms, idfs):
+        for (rx, is_concept), idf in zip(terms, idfs):
             if idf <= 0.0:
                 continue
             field_s = 0.0
@@ -509,12 +514,12 @@ def _rank_docs(docs: list[tuple], raw_terms: list[str], ref_date: datetime.date,
             body_bm25 = (tf * (k1 + 1.0)) / (tf + k1 * (1.0 - b + b * (dl / avgdl))) if tf else 0.0
             term_s = field_s + 2.0 * body_bm25
             if term_s > 0.0:
-                matched += 1
+                matched += is_concept
                 raw_score += idf * term_s
                 if not snippet and found:
                     snippet = _locate_match(full_text, body, rx)
         if raw_score > 0.0:
-            co_boost = raw_score * (1.0 + 0.5 * (matched - 1))
+            co_boost = raw_score * (1.0 + 0.5 * max(0, matched - 1))
             recency = 1.0 if no_decay else _recency_weight(e["last_updated"], ref_date)
             score = round(co_boost * recency, 2)
             hits.append((score, slug, e, total_lines, matched_atoms, snippet))

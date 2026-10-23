@@ -167,7 +167,22 @@ with tempfile.TemporaryDirectory() as d:
     r_len = sh(f'"{own}/wikictl" search tariff')
     hits_len = [l for l in r_len.stdout.splitlines() if l.startswith("[[")]
     assert hits_len[0].startswith("[[price-2026]]") and hits_len[-1].startswith("[[bloat]]"), r_len.stdout
-    for p in ["price-2023.md", "price-2026.md", "bloat.md", "rare.md"]:
+    # Capped decay: an old page titled with the term still beats a fresh summary-only mention; undated is neutral
+    (own / "llmwiki" / "case-endings.md").write_text(
+        '---\ntitle: "Dativ"\nsummary: "Case rules and endings."\nsources: []\nsource_count: 0\n'
+        'provenance:\n  - "chat"\nlast_updated: 2020-01-01\n---\n\n# Dativ\n\nDativ endings: dem, der, den.\n')
+    (own / "llmwiki" / "class-notes.md").write_text(
+        '---\ntitle: "Class notes"\nsummary: "Covered Dativ briefly."\nsources: []\nsource_count: 0\n'
+        'provenance:\n  - "chat"\nlast_updated: 2099-01-01\n---\n\n# Class notes\n\nVocab list.\n')
+    (own / "llmwiki" / "undated.md").write_text(
+        '---\ntitle: "Undated"\nsummary: "Covered Dativ briefly."\nsources: []\nsource_count: 0\n'
+        'provenance:\n  - "chat"\n---\n\n# Undated\n\nVocab list.\n')
+    r_cap = sh(f'"{own}/wikictl" search dativ')
+    hits_cap = [l for l in r_cap.stdout.splitlines() if l.startswith("[[")]
+    assert hits_cap[0].startswith("[[case-endings]]"), r_cap.stdout
+    # undated ties the newest page (same score) instead of being penalised
+    assert len({l.split()[1] for l in hits_cap[1:]}) == 1, r_cap.stdout
+    for p in ["price-2023.md", "price-2026.md", "bloat.md", "rare.md", "case-endings.md", "class-notes.md", "undated.md"]:
         (own / "llmwiki" / p).unlink()
 
     # adopt external: the work repo is untouched, lobe home links to it

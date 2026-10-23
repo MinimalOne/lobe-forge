@@ -377,12 +377,12 @@ def _parse_date(date_str: str) -> datetime.date | None:
 
 
 def _recency_weight(date_str: str, ref_date: datetime.date) -> float:
-    """Gentle time-decay multiplier in (0, 1.0]: newer pages outrank stale ones on ties/near-ties."""
+    """Time-decay multiplier in [0.85, 1.0]: newer pages win ties/near-ties, never real relevance gaps."""
     d = _parse_date(date_str)
     if d is None:
-        return 0.7
+        return 1.0  # undated is unknown, not stale
     age_days = max(0, (ref_date - d).days)
-    return 1.0 / (1.0 + 0.002 * age_days)
+    return max(0.85, 1.0 / (1.0 + 0.0005 * age_days))
 
 
 def cmd_search(args) -> int:

@@ -261,6 +261,16 @@ with tempfile.TemporaryDirectory() as d:
     assert "=== query: holiday ===" in r_batch.stdout and "[[old-page]]" in r_batch.stdout, r_batch.stdout
     assert "=== query: nonexistent-candidate ===\nNo matching pages." in r_batch.stdout, r_batch.stdout
 
+    # pending: lists raw files no page cites
+    assert "No pending raw sources." in sh(f'"{own}/wikictl" pending').stdout
+    (own / "docs" / "2026-10-20-fresh-notes.md").write_text("---\nsource: typed\ncaptured: 2026-10-20\n---\nNew.\n")
+    (own / "docs" / "trip.md").write_text("---\nsource: url\ncaptured: 2026-05-01\n---\nUpdated trip.\n")
+    r_pend = sh(f'"{own}/wikictl" pending')
+    assert "Un-ingested raw sources (1):\n  docs/2026-10-20-fresh-notes.md" in r_pend.stdout, r_pend.stdout
+    assert "docs/trip.md" not in r_pend.stdout, r_pend.stdout
+    (own / "docs" / "2026-10-20-fresh-notes.md").unlink()
+    (own / "docs" / "trip.md").write_text("src")
+
     # adopt external: the work repo is untouched, lobe home links to it
     home = d / "lobes" / "_adopted" / "work-wiki"
     code, out = run("create", "--name", "work-wiki", "--purpose", "Team repo.", "--repo", str(work),

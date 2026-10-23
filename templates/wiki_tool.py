@@ -10,6 +10,7 @@ Commands:
   sections        List index.md section headings
   index-add       Insert one row into an index.md section without reading the whole index
   set-atoms       Write or replace the frontmatter atoms: list on a wiki page
+  pending         List raw/ sources not cited by any wiki page
   convert-legacy  Move legacy bold Summary/Sources/Last updated lines into frontmatter
 
 Paths default to this repo's layout (wiki/, raw/). Override with WIKI_ROOT, WIKI_DIR,
@@ -724,6 +725,29 @@ def cmd_set_atoms(args) -> int:
     return 0
 
 
+def cmd_pending(_args) -> int:
+    if not RAW.is_dir():
+        print("No pending raw sources.")
+        return 0
+    cited = {src for p in _content_pages() for src in parse_page(p)["sources"]}
+
+    uningested: list[str] = []
+    for f in sorted(RAW.rglob("*")):
+        if not f.is_file() or any(part.startswith(".") for part in f.relative_to(RAW).parts):
+            continue
+        rel = f.relative_to(REPO).as_posix()
+        if rel not in cited:
+            uningested.append(rel)
+
+    if not uningested:
+        print("No pending raw sources.")
+        return 0
+    print(f"Un-ingested raw sources ({len(uningested)}):")
+    for r in uningested:
+        print(f"  {r}")
+    return 0
+
+
 def cmd_convert_legacy(args) -> int:
     done = skipped = 0
     for p in sorted(WIKI.glob("*.md")):
@@ -788,6 +812,8 @@ def main():
     atoms_p.add_argument("page", help="Page slug or filename")
     atoms_p.add_argument("atoms", nargs="+", help="Concise atoms: 'cmd: ...', 'fix: ...', 'decision: ...', 'fact: ...'")
 
+    sub.add_parser("pending", help="List raw/ files not cited by any wiki page")
+
     conv_p = sub.add_parser("convert-legacy", help="Convert legacy pages to frontmatter (dry run unless --apply)")
     conv_p.add_argument("--apply", action="store_true", help="Write the converted pages")
 
@@ -798,7 +824,7 @@ def main():
         sys.exit(cmd_lint(args))
     else:
         sys.exit({"search": cmd_search, "links": cmd_links, "sections": cmd_sections,
-                  "index-add": cmd_index_add, "set-atoms": cmd_set_atoms,
+                  "index-add": cmd_index_add, "set-atoms": cmd_set_atoms, "pending": cmd_pending,
                   "convert-legacy": cmd_convert_legacy}[args.command](args))
 
 

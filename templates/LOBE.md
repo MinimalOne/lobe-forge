@@ -13,7 +13,7 @@ sources and asks questions; Claude maintains the wiki through the `{{NAME}}-*` s
 {{WIKI}}/           wiki pages, one concept or entity per page
 {{WIKI}}/index.md   table of contents, grouped by ## sections
 {{WIKI}}/log.md     append-only operation log
-wikictl         wrapper: wiki_tool.py for this lobe (search, links, sections, index-add, set-atoms, lint, build, convert-legacy)
+wikictl         wrapper: wiki_tool.py for this lobe (search, links, sections, index-add, set-atoms, pending, lint, build, convert-legacy)
 skills/         the {{NAME}}-add-raw / -ingest / -ask / -lint skills (symlinked into Claude)
 ```
 

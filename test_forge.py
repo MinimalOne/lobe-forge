@@ -139,6 +139,37 @@ with tempfile.TemporaryDirectory() as d:
     assert len(queries) == 3 and r.returncode == 0, r.stderr
     assert "llmwiki/cutover.md 2026-01-10 event 2026-01-15" in r.stdout and "2999" not in r.stdout, r.stdout
 
+    # BM25F + recency weighting: newer page outranks stale duplicate; rare term (IDF) and concise body outrank bloat
+    (own / "llmwiki" / "price-2023.md").write_text(
+        '---\ntitle: "Pricing Plan"\nsummary: "Tier pricing details."\nsources: []\nsource_count: 0\n'
+        'provenance:\n  - "chat"\nlast_updated: 2023-01-01\n---\n\n# Pricing Plan\n\nWidget tariff is $10, tariff applies monthly.\n')
+    (own / "llmwiki" / "price-2026.md").write_text(
+        '---\ntitle: "Pricing Plan"\nsummary: "Tier pricing details."\nsources: []\nsource_count: 0\n'
+        'provenance:\n  - "chat"\nlast_updated: 2026-10-15\n---\n\n# Pricing Plan\n\nWidget tariff is $25.\n')
+    r_dec = sh(f'"{own}/wikictl" search tariff')
+    hits_dec = [l for l in r_dec.stdout.splitlines() if l.startswith("[[")]
+    assert hits_dec[0].startswith("[[price-2026]]") and hits_dec[1].startswith("[[price-2023]]"), r_dec.stdout
+    r_nodec = sh(f'"{own}/wikictl" search --no-decay tariff')
+    hits_nodec = [l for l in r_nodec.stdout.splitlines() if l.startswith("[[")]
+    # Without recency decay, price-2023 has higher TF (2 mentions of tariff vs 1) and wins
+    assert hits_nodec[0].startswith("[[price-2023]]"), r_nodec.stdout
+    # IDF + length normalization: a concise page matching a rare term outranks a bloated page or common-term match
+    (own / "llmwiki" / "bloat.md").write_text(
+        '---\ntitle: "Note"\nsummary: "Tier note."\nsources: []\nsource_count: 0\n'
+        'provenance:\n  - "chat"\nlast_updated: 2026-10-15\n---\n\n# Note\n\n' + ("filler word " * 300) + "tariff\n")
+    (own / "llmwiki" / "rare.md").write_text(
+        '---\ntitle: "Rare"\nsummary: "Unique zigbee details."\nsources: []\nsource_count: 0\n'
+        'provenance:\n  - "chat"\nlast_updated: 2026-10-15\n---\n\n# Rare\n\nBody.\n')
+    r_idf = sh(f'"{own}/wikictl" search tier zigbee')
+    hits_idf = [l for l in r_idf.stdout.splitlines() if l.startswith("[[")]
+    # "zigbee" appears in 1 page (high IDF); "tier" appears in 3 pages (low IDF) -> rare.md ranks #1
+    assert hits_idf[0].startswith("[[rare]]"), r_idf.stdout
+    r_len = sh(f'"{own}/wikictl" search tariff')
+    hits_len = [l for l in r_len.stdout.splitlines() if l.startswith("[[")]
+    assert hits_len[0].startswith("[[price-2026]]") and hits_len[-1].startswith("[[bloat]]"), r_len.stdout
+    for p in ["price-2023.md", "price-2026.md", "bloat.md", "rare.md"]:
+        (own / "llmwiki" / p).unlink()
+
     # adopt external: the work repo is untouched, lobe home links to it
     home = d / "lobes" / "_adopted" / "work-wiki"
     code, out = run("create", "--name", "work-wiki", "--purpose", "Team repo.", "--repo", str(work),

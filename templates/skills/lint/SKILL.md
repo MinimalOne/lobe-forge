@@ -36,6 +36,7 @@ queries below select.
 ```bash
 W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 "$W" lint
+"$W" pending
 ```
 
 | Check | Meaning |

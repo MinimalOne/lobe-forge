@@ -406,9 +406,19 @@ def _locate_match(full_text: str, body: str, rx: re.Pattern) -> str:
             body_start = full_text[: end_fm + 5].count("\n")
         except ValueError:
             pass
-    h2_indices = [i for i in range(body_start, n_lines) if lines[i].startswith("## ")]
+    # lines inside ``` fences: "# comment" / "## comment" there are code, not headings
+    code: set[int] = set()
+    fenced = False
+    for i in range(body_start, n_lines):
+        if lines[i].lstrip().startswith("```"):
+            fenced = not fenced
+            code.add(i)
+        elif fenced:
+            code.add(i)
+    h2_indices = [i for i in range(body_start, n_lines) if i not in code and lines[i].startswith("## ")]
+    h1 = next((i for i in range(body_start, n_lines) if i not in code and lines[i].startswith("# ")), None)
     for idx in range(body_start, n_lines):
-        if lines[idx].startswith("# "):
+        if idx == h1:  # the title; cmd_search strips it from body too
             continue
         if rx.search(lines[idx]):
             sec_heading = ""
@@ -422,7 +432,7 @@ def _locate_match(full_text: str, body: str, rx: re.Pattern) -> str:
                     break
             # neighbouring headings are noise, but keep the matched line even when it is a heading
             ctx = [lines[j].strip() for j in range(max(body_start, idx - 1), min(n_lines, idx + 2))
-                   if lines[j].strip() and (j == idx or not re.match(r"^#+ ", lines[j]))]
+                   if lines[j].strip() and (j == idx or j in code or not re.match(r"^#+ ", lines[j]))]
             win = " ".join(ctx) if ctx else lines[idx].strip()
             m = rx.search(win)
             raw_snip = win[max(0, m.start() - 70): m.end() + 70] if m else win

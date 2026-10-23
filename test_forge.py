@@ -223,6 +223,13 @@ with tempfile.TemporaryDirectory() as d:
     r_head = sh(f'"{own}/wikictl" search quokka')
     assert "match:   [L17-18 ## Quokka setup] ## Quokka setup Steps here." in r_head.stdout, r_head.stdout
     (own / "llmwiki" / "heads.md").unlink()
+    # "# comment" / "## comment" inside a code fence is code: matched with a line tag, never a section
+    (own / "llmwiki" / "ops.md").write_text(
+        '---\ntitle: "Ops"\nsummary: "S."\nsources: []\nsource_count: 0\nprovenance:\n  - "chat"\n'
+        'last_updated: 2026-10-01\n---\n\n# Ops\n\n## Restart\n\n```bash\n## step one\n# flush the quokkacache first\nsudo restart x\n```\n')
+    r_code = sh(f'"{own}/wikictl" search quokkacache')
+    assert "match:   [L13-19 ## Restart] ## step one # flush the quokkacache first sudo restart x" in r_code.stdout, r_code.stdout
+    (own / "llmwiki" / "ops.md").unlink()
 
     # adopt external: the work repo is untouched, lobe home links to it
     home = d / "lobes" / "_adopted" / "work-wiki"

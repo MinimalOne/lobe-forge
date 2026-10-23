@@ -24,7 +24,9 @@ Checks run by lint:
 """
 
 import argparse
+import datetime
 import json
+import math
 import os
 import re
 import sys
@@ -365,43 +367,95 @@ def _content_pages() -> list[Path]:
     return [p for p in sorted(WIKI.glob("*.md")) if p.name not in SKIP]
 
 
+def _parse_date(date_str: str) -> datetime.date | None:
+    if not date_str:
+        return None
+    try:
+        return datetime.date.fromisoformat(str(date_str).strip()[:10])
+    except ValueError:
+        return None
+
+
+def _recency_weight(date_str: str, ref_date: datetime.date) -> float:
+    """Time-decay multiplier in [0.85, 1.0]: newer pages win ties/near-ties, never real relevance gaps."""
+    d = _parse_date(date_str)
+    if d is None:
+        return 1.0  # undated is unknown, not stale
+    age_days = max(0, (ref_date - d).days)
+    return max(0.85, 1.0 / (1.0 + 0.0005 * age_days))
+
+
 def cmd_search(args) -> int:
     terms = [_compile(t) for t in args.terms]
-    hits = []
+    docs = []
     for p in _content_pages():
         text = p.read_text()
         e = parse_page(p, text)
         _, body = parse_frontmatter(text)
         body = re.sub(r"\A\s*# .*\n", "", body)  # H1 repeats the title; keep snippets informative
-        score, matched, snippet = 0, 0, ""
-        for rx in terms:
-            s = 0
-            if rx.search(p.stem):
-                s += 10
+        docs.append((p.stem, e, body, max(1, len(body.split()))))
+
+    if not docs:
+        print("No matching pages.")
+        return 1
+
+    n_docs = len(docs)
+    avgdl = sum(dl for _, _, _, dl in docs) / n_docs
+    ref_date = datetime.date.today()  # not max(last_updated): one future-dated typo would age every page
+    k1, b = 1.5, 0.75
+
+    # Inverse Document Frequency (BM25 Robertson-Spärck Jones IDF) per query concept
+    idfs = []
+    for rx in terms:
+        df = sum(
+            1 for slug, e, body, _ in docs
+            if rx.search(slug)
+            or rx.search(e["title"])
+            or any(rx.search(a) for a in e["aliases"])
+            or rx.search(e["summary"])
+            or rx.search(body)
+        )
+        idfs.append(math.log(1.0 + (n_docs - df + 0.5) / (df + 0.5)) if df else 0.0)
+
+    no_decay = getattr(args, "no_decay", False)
+    hits = []
+    for slug, e, body, dl in docs:
+        raw_score, matched, snippet = 0.0, 0, ""
+        for rx, idf in zip(terms, idfs):
+            if idf <= 0.0:
+                continue
+            field_s = 0.0
+            if rx.search(slug):
+                field_s += 10.0
             if rx.search(e["title"]):
-                s += 8
+                field_s += 8.0
             if any(rx.search(a) for a in e["aliases"]):
-                s += 8
+                field_s += 8.0
             if rx.search(e["summary"]):
-                s += 4
+                field_s += 4.0
             found = rx.findall(body)
-            s += min(len(found), 5)
-            if s:
+            tf = len(found)
+            body_bm25 = (tf * (k1 + 1.0)) / (tf + k1 * (1.0 - b + b * (dl / avgdl))) if tf else 0.0
+            term_s = field_s + 2.0 * body_bm25
+            if term_s > 0.0:
                 matched += 1
-                score += s
+                raw_score += idf * term_s
                 if not snippet and found:
                     m = rx.search(body)
                     snippet = _one_line(body[max(0, m.start() - 70): m.end() + 70], 170)
-        if score:
-            # pages matching more distinct terms outrank pages that repeat one term
-            hits.append((score + 5 * matched, p.stem, e, snippet))
+        if raw_score > 0.0:
+            # Pages matching more distinct query concepts outrank pages repeating a single concept
+            co_boost = raw_score * (1.0 + 0.5 * (matched - 1))
+            recency = 1.0 if no_decay else _recency_weight(e["last_updated"], ref_date)
+            score = round(co_boost * recency, 2)
+            hits.append((score, slug, e, snippet))
 
     if not hits:
         print("No matching pages.")
         return 1
     hits.sort(key=lambda h: (-h[0], h[1]))
     for score, slug, e, snippet in hits[: args.limit]:
-        print(f"[[{slug}]] score={score} updated={e['last_updated'] or '?'} — {e['title']}")
+        print(f"[[{slug}]] score={score:.1f} updated={e['last_updated'] or '?'} — {e['title']}")
         if e["summary"]:
             print(f"    summary: {_one_line(e['summary'], 200)}")
         if snippet:
@@ -555,9 +609,10 @@ def main():
         help="Exit 1 only for hard errors (C, G-data, H); treat legacy/orphan/index as warnings",
     )
 
-    search_p = sub.add_parser("search", help="Rank pages for one or more terms (regex, case-insensitive)")
+    search_p = sub.add_parser("search", help="Rank pages for one or more terms (BM25F + recency, regex, case-insensitive)")
     search_p.add_argument("terms", nargs="+", help="One term per concept; aliases as alternation, e.g. 'eks|kubernetes'")
     search_p.add_argument("--limit", type=int, default=8)
+    search_p.add_argument("--no-decay", action="store_true", help="Disable recency weighting on last_updated")
 
     links_p = sub.add_parser("links", help="Outgoing links with summaries + inbound links for a page")
     links_p.add_argument("page")

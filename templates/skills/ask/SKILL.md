@@ -51,8 +51,10 @@ W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" path
 "$W" search "school|kindergarten|kita" "fees?|cost|price"
 ```
 
-Pages matching more terms rank higher; title, slug and alias matches outrank body matches.
-The summary and snippet per hit are often enough to rule a page in or out unopened.
+Pages are ranked by field-weighted BM25 (rare terms and concise pages score higher; title,
+slug and alias matches outrank body matches) with recency weighting on `last_updated` so newer
+pages outrank stale ones (pass `--no-decay` for historical queries). The summary and snippet
+per hit are often enough to rule a page in or out unopened.
 
 No hits → retry once with broader terms. Still none → `"$W" sections`, then
 `grep -n -A40 '^## <Section>' "$WIKI/index.md"`.

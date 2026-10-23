@@ -213,6 +213,24 @@ with tempfile.TemporaryDirectory() as d:
     assert r_set2.returncode == 0 and "Set 1 atom(s) on cutover.md" in r_set2.stdout, r_set2.stdout
     assert "kubectl" not in (own / "llmwiki" / "cutover.md").read_text() and "maintenance window" in (own / "llmwiki" / "cutover.md").read_text()
 
+    # search reports total line count and 1-based [L<start>-<end> ## Section] range on body matches
+    r_loc = sh(f'"{own}/wikictl" search "old-page"')
+    assert "lines=19 — Mixed; Page" in r_loc.stdout and "[L17-19 ## Body] Keep [[old-page]] text." in r_loc.stdout, r_loc.stdout
+    # a match on a heading line keeps that heading in the snippet
+    (own / "llmwiki" / "heads.md").write_text(
+        '---\ntitle: "Heads"\nsummary: "S."\nsources: []\nsource_count: 0\nprovenance:\n  - "chat"\n'
+        'last_updated: 2026-10-01\n---\n\n# Heads\n\n## Intro\n\nText.\n\n## Quokka setup\nSteps here.\n')
+    r_head = sh(f'"{own}/wikictl" search quokka')
+    assert "match:   [L17-18 ## Quokka setup] ## Quokka setup Steps here." in r_head.stdout, r_head.stdout
+    (own / "llmwiki" / "heads.md").unlink()
+    # "# comment" / "## comment" inside a code fence is code: matched with a line tag, never a section
+    (own / "llmwiki" / "ops.md").write_text(
+        '---\ntitle: "Ops"\nsummary: "S."\nsources: []\nsource_count: 0\nprovenance:\n  - "chat"\n'
+        'last_updated: 2026-10-01\n---\n\n# Ops\n\n## Restart\n\n```bash\n## step one\n# flush the quokkacache first\nsudo restart x\n```\n')
+    r_code = sh(f'"{own}/wikictl" search quokkacache')
+    assert "match:   [L13-19 ## Restart] ## step one # flush the quokkacache first sudo restart x" in r_code.stdout, r_code.stdout
+    (own / "llmwiki" / "ops.md").unlink()
+
     # adopt external: the work repo is untouched, lobe home links to it
     home = d / "lobes" / "_adopted" / "work-wiki"
     code, out = run("create", "--name", "work-wiki", "--purpose", "Team repo.", "--repo", str(work),

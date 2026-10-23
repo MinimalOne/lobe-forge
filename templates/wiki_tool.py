@@ -395,6 +395,42 @@ def _recency_weight(date_str: str, ref_date: datetime.date) -> float:
     return max(0.85, 1.0 / (1.0 + 0.0005 * age_days))
 
 
+def _locate_match(full_text: str, body: str, rx: re.Pattern) -> str:
+    """Return a snippet prefixed with [L<start>-<end> ## Section] (1-based file line numbers)."""
+    lines = full_text.splitlines()
+    n_lines = len(lines)
+    body_start = 0
+    if full_text.startswith("---\n"):
+        try:
+            end_fm = full_text.index("\n---\n", 4)
+            body_start = full_text[: end_fm + 5].count("\n")
+        except ValueError:
+            pass
+    h2_indices = [i for i in range(body_start, n_lines) if lines[i].startswith("## ")]
+    for idx in range(body_start, n_lines):
+        if lines[idx].startswith("# "):
+            continue
+        if rx.search(lines[idx]):
+            sec_heading = ""
+            sec_start, sec_end = idx + 1, min(n_lines, idx + 10)
+            for k, h_idx in enumerate(h2_indices):
+                if h_idx <= idx:
+                    sec_heading = lines[h_idx].strip()
+                    sec_start = h_idx + 1
+                    sec_end = h2_indices[k + 1] if k + 1 < len(h2_indices) else n_lines
+                else:
+                    break
+            ctx = [l.strip() for l in lines[max(body_start, idx - 1): min(n_lines, idx + 2)]
+                   if l.strip() and not re.match(r"^#+ ", l)]
+            win = " ".join(ctx) if ctx else lines[idx].strip()
+            m = rx.search(win)
+            raw_snip = win[max(0, m.start() - 70): m.end() + 70] if m else win
+            tag = f"[L{sec_start}-{sec_end} {sec_heading}]" if sec_heading else f"[L{idx + 1}-{sec_end}]"
+            return f"{tag} {_one_line(raw_snip, 150)}"
+    m = rx.search(body)
+    return _one_line(body[max(0, m.start() - 70): m.end() + 70], 170) if m else ""
+
+
 def cmd_search(args) -> int:
     terms = [_compile(t) for t in args.terms]
     docs = []
@@ -403,14 +439,14 @@ def cmd_search(args) -> int:
         e = parse_page(p, text)
         _, body = parse_frontmatter(text)
         body = re.sub(r"\A\s*# .*\n", "", body)  # H1 repeats the title; keep snippets informative
-        docs.append((p.stem, e, body, max(1, len(body.split()))))
+        docs.append((p.stem, e, text, body, max(1, len(body.split())), len(text.splitlines())))
 
     if not docs:
         print("No matching pages.")
         return 1
 
     n_docs = len(docs)
-    avgdl = sum(dl for _, _, _, dl in docs) / n_docs
+    avgdl = sum(dl for _, _, _, _, dl, _ in docs) / n_docs
     ref_date = datetime.date.today()  # not max(last_updated): one future-dated typo would age every page
     k1, b = 1.5, 0.75
 
@@ -418,7 +454,7 @@ def cmd_search(args) -> int:
     idfs = []
     for rx in terms:
         df = sum(
-            1 for slug, e, body, _ in docs
+            1 for slug, e, _, body, _, _ in docs
             if rx.search(slug)
             or rx.search(e["title"])
             or any(rx.search(a) for a in e["aliases"])
@@ -430,7 +466,7 @@ def cmd_search(args) -> int:
 
     no_decay = getattr(args, "no_decay", False)
     hits = []
-    for slug, e, body, dl in docs:
+    for slug, e, full_text, body, dl, total_lines in docs:
         raw_score, matched, snippet = 0.0, 0, ""
         matched_atoms: list[str] = []
         for rx, idf in zip(terms, idfs):
@@ -459,21 +495,20 @@ def cmd_search(args) -> int:
                 matched += 1
                 raw_score += idf * term_s
                 if not snippet and found:
-                    m = rx.search(body)
-                    snippet = _one_line(body[max(0, m.start() - 70): m.end() + 70], 170)
+                    snippet = _locate_match(full_text, body, rx)
         if raw_score > 0.0:
             # Pages matching more distinct query concepts outrank pages repeating a single concept
             co_boost = raw_score * (1.0 + 0.5 * (matched - 1))
             recency = 1.0 if no_decay else _recency_weight(e["last_updated"], ref_date)
             score = round(co_boost * recency, 2)
-            hits.append((score, slug, e, matched_atoms, snippet))
+            hits.append((score, slug, e, total_lines, matched_atoms, snippet))
 
     if not hits:
         print("No matching pages.")
         return 1
     hits.sort(key=lambda h: (-h[0], h[1]))
-    for score, slug, e, matched_atoms, snippet in hits[: args.limit]:
-        print(f"[[{slug}]] score={score:.1f} updated={e['last_updated'] or '?'} — {e['title']}")
+    for score, slug, e, total_lines, matched_atoms, snippet in hits[: args.limit]:
+        print(f"[[{slug}]] score={score:.1f} updated={e['last_updated'] or '?'} lines={total_lines} — {e['title']}")
         if e["summary"]:
             print(f"    summary: {_one_line(e['summary'], 200)}")
         for a in matched_atoms[:3]:

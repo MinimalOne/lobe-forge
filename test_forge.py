@@ -213,6 +213,10 @@ with tempfile.TemporaryDirectory() as d:
     assert r_set2.returncode == 0 and "Set 1 atom(s) on cutover.md" in r_set2.stdout, r_set2.stdout
     assert "kubectl" not in (own / "llmwiki" / "cutover.md").read_text() and "maintenance window" in (own / "llmwiki" / "cutover.md").read_text()
 
+    # search reports total line count and 1-based [L<start>-<end> ## Section] range on body matches
+    r_loc = sh(f'"{own}/wikictl" search "old-page"')
+    assert "lines=19 — Mixed; Page" in r_loc.stdout and "[L17-19 ## Body] Keep [[old-page]] text." in r_loc.stdout, r_loc.stdout
+
     # adopt external: the work repo is untouched, lobe home links to it
     home = d / "lobes" / "_adopted" / "work-wiki"
     code, out = run("create", "--name", "work-wiki", "--purpose", "Team repo.", "--repo", str(work),

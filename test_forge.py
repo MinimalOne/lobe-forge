@@ -231,6 +231,36 @@ with tempfile.TemporaryDirectory() as d:
     assert "match:   [L13-19 ## Restart] ## step one # flush the quokkacache first sudo restart x" in r_code.stdout, r_code.stdout
     (own / "llmwiki" / "ops.md").unlink()
 
+    # multi-word phrase tokenization and --batch candidate search
+    r_phrase = sh(f'"{own}/wikictl" search "window 02:00"')
+    assert "[[cutover]]" in r_phrase.stdout, r_phrase.stdout
+    # phrase tokens are whole words without stopwords: "ip"/"the" must not hit "zip script ... other"
+    (own / "llmwiki" / "zip-notes.md").write_text(
+        '---\ntitle: "Zip notes"\nsummary: "Use the zip script to skip other files."\nsources: []\nsource_count: 0\n'
+        'provenance:\n  - "chat"\nlast_updated: 2026-10-01\n---\n\n# Zip notes\n\nHow to do it.\n')
+    (own / "llmwiki" / "addressing.md").write_text(
+        '---\ntitle: "Addressing"\nsummary: "S."\nsources: []\nsource_count: 0\n'
+        'provenance:\n  - "chat"\nlast_updated: 2026-10-01\n---\n\n# Addressing\n\nGive it a static IP.\n')
+    r_noise = sh(f'"{own}/wikictl" search "how to reset the router ip"')
+    # ...while 2-letter technical words like "ip" still match as whole words
+    assert "[[zip-notes]]" not in r_noise.stdout and "[[addressing]]" in r_noise.stdout, r_noise.stdout
+    # a multi-word concept matched only through its words still counts toward the multi-concept boost
+    (own / "llmwiki" / "net-both.md").write_text(
+        '---\ntitle: "Net both"\nsummary: "S."\nsources: []\nsource_count: 0\n'
+        'provenance:\n  - "chat"\nlast_updated: 2026-10-01\n---\n\n# Net both\n\nThe router has a vlan. The firewall has rules.\n')
+    def net_score(*q):
+        out = sh(f'"{own}/wikictl" search ' + " ".join(f'"{t}"' for t in q)).stdout
+        return float(next(l for l in out.splitlines() if l.startswith("[[net-both]]")).split("score=")[1].split()[0])
+    both, s1, s2 = net_score("router vlan", "firewall rules"), net_score("router vlan"), net_score("firewall rules")
+    assert abs(both - 1.5 * (s1 + s2)) < 0.3, (both, s1, s2)
+    for p in ["zip-notes.md", "addressing.md", "net-both.md"]:
+        (own / "llmwiki" / p).unlink()
+    r_batch = sh(f'"{own}/wikictl" search --batch "cutover|rollout" "holiday" "nonexistent-candidate" --limit 3')
+    assert r_batch.returncode == 0, r_batch.stdout
+    assert "=== query: cutover|rollout ===" in r_batch.stdout and "[[cutover]]" in r_batch.stdout, r_batch.stdout
+    assert "=== query: holiday ===" in r_batch.stdout and "[[old-page]]" in r_batch.stdout, r_batch.stdout
+    assert "=== query: nonexistent-candidate ===\nNo matching pages." in r_batch.stdout, r_batch.stdout
+
     # adopt external: the work repo is untouched, lobe home links to it
     home = d / "lobes" / "_adopted" / "work-wiki"
     code, out = run("create", "--name", "work-wiki", "--purpose", "Team repo.", "--repo", str(work),

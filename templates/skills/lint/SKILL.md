@@ -104,7 +104,8 @@ become `sources`, everything else becomes `provenance`; the body is not touched.
 pages by hand, then append one line to `{{WIKI}}/log.md` with `cat >>`.
 
 **Migrate pages missing `atoms:` (I)**: to upgrade existing pages (including newly converted
-legacy pages) to the current format, read each page flagged under `I`, distill 2–5 high-signal
+legacy pages) to the current format, take at most 10 pages flagged under `I` per run (offer to
+continue in a later run), read each, distill 2–5 high-signal
 atoms from its body (`cmd: <exact command>`, `fix: <exact error -> fix>`,
 `decision: <choice because reason>`, `fact: <key number/price/date>`, `q: <search question>`),
 and write them into frontmatter without manual YAML edits:

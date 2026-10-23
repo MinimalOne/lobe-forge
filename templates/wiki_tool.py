@@ -591,6 +591,10 @@ def cmd_set_atoms(args) -> int:
     if not path.is_file():
         print(f"No page '{slug}'.", file=sys.stderr)
         return 1
+    atoms = [" ".join(a.split()) for a in args.atoms if a.strip()]
+    if not atoms:
+        print("No non-blank atoms given.", file=sys.stderr)
+        return 1
     text = path.read_text()
     if not text.startswith("---\n"):
         print(f"{path.name} has no frontmatter (run convert-legacy --apply first).", file=sys.stderr)
@@ -603,7 +607,7 @@ def cmd_set_atoms(args) -> int:
 
     fm_lines = text[4:end].splitlines()
     body = text[end + 5:]
-    atoms_block = ["atoms:"] + [f"  - {_q(' '.join(a.split()))}" for a in args.atoms if a.strip()]
+    atoms_block = ["atoms:"] + [f"  - {_q(a)}" for a in atoms]
 
     # Remove any existing atoms: block in frontmatter
     cleaned: list[str] = []

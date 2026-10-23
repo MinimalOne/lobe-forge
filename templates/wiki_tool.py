@@ -3,12 +3,13 @@
 wiki_tool.py — deterministic CLI for a lobe (LLM wiki) repo.
 
 Commands:
-  build        Parse all wiki pages and write catalog.jsonl
-  lint         Run deterministic quality checks (exits 0=ok, 1=issues found)
-  search       Rank pages for one or more terms (title/alias/summary/body), with snippets
-  links        Show a page's outgoing links (with summaries) and inbound links
-  sections     List index.md section headings
-  index-add    Insert one row into an index.md section without reading the whole index
+  build           Parse all wiki pages and write catalog.jsonl
+  lint            Run deterministic quality checks (exits 0=ok, 1=issues found)
+  search          Rank pages for one or more terms (BM25F + recency), with atoms & snippets
+  links           Show a page's outgoing links (with summaries) and inbound links
+  sections        List index.md section headings
+  index-add       Insert one row into an index.md section without reading the whole index
+  set-atoms       Write or replace the frontmatter atoms: list on a wiki page
   convert-legacy  Move legacy bold Summary/Sources/Last updated lines into frontmatter
 
 Paths default to this repo's layout (wiki/, raw/). Override with WIKI_ROOT, WIKI_DIR,
@@ -21,6 +22,7 @@ Checks run by lint:
   C  Broken links — [[target]] page does not exist           [error]
   D  Index discrepancy — file/index out of sync              [quality]
   H  Missing source files — sources: path does not exist     [data error]
+  I  Missing atoms — frontmatter has no atoms: list          [quality]
 """
 
 import argparse
@@ -171,6 +173,9 @@ def parse_page(path: Path, text: str | None = None) -> dict:
         aliases = fm.get("aliases", [])
         if isinstance(aliases, str):
             aliases = [aliases]
+        atoms = fm.get("atoms", [])
+        if isinstance(atoms, str):
+            atoms = [atoms]
         return {
             "page": f"{WIKI.name}/{path.name}",
             "title": fm.get("title", ""),
@@ -179,6 +184,7 @@ def parse_page(path: Path, text: str | None = None) -> dict:
             "source_count": sc,
             "provenance": provenance,
             "aliases": aliases,
+            "atoms": atoms,
             "last_updated": fm.get("last_updated", ""),
             "wiki_links": wiki_links_in(text),
             "has_frontmatter": True,
@@ -194,6 +200,7 @@ def parse_page(path: Path, text: str | None = None) -> dict:
         "source_count": len(sources),
         "provenance": fields.get("provenance", []),
         "aliases": [],
+        "atoms": [],
         "last_updated": fields.get("last_updated", ""),
         "wiki_links": wiki_links_in(text),
         "has_frontmatter": False,
@@ -231,7 +238,7 @@ def cmd_lint(args) -> int:
         entries[p.name] = parse_page(p)
 
     page_names = set(entries.keys())
-    issues: dict[str, list[tuple[str, str]]] = {c: [] for c in "GBCDH"}
+    issues: dict[str, list[tuple[str, str]]] = {c: [] for c in "GBCDHI"}
 
     # G — Frontmatter
     legacy_pages = []
@@ -247,6 +254,8 @@ def cmd_lint(args) -> int:
         for field in ("title", "summary", "last_updated"):
             if not e.get(field):
                 issues["G"].append((name, f"frontmatter field '{field}' is empty or missing"))
+        if not e.get("atoms"):
+            issues["I"].append((name, "frontmatter 'atoms' is empty or missing (use set-atoms to add commands/facts/decisions)"))
 
     # B — Orphans: build inbound-link map (count index.md links too)
     inbound: dict[str, list[str]] = {n: [] for n in page_names}
@@ -294,9 +303,10 @@ def cmd_lint(args) -> int:
         "C": "Broken wiki-links",
         "D": "Index discrepancies",
         "H": "Missing source files",
+        "I": "Missing atoms (commands, error fixes, facts, decisions)",
     }
     # In strict mode only G-data-errors, C, and H are hard errors that block commits.
-    # G-legacy (missing frontmatter), B, and D are soft warnings.
+    # G-legacy (missing frontmatter), B, D, and I are soft warnings.
     strict = getattr(args, "strict", False)
 
     total = sum(len(v) for v in issues.values()) + len(legacy_pages)
@@ -307,9 +317,9 @@ def cmd_lint(args) -> int:
         return 0
 
     n = 1
-    for check in "GBCDH":
+    for check in "GBCDHI":
         items = issues[check]
-        soft_tag = "  [warning — not blocking]" if strict and check in ("B", "D") else ""
+        soft_tag = "  [warning — not blocking]" if strict and check in ("B", "D", "I") else ""
 
         if check == "G":
             leg_count = len(legacy_pages)
@@ -412,6 +422,7 @@ def cmd_search(args) -> int:
             if rx.search(slug)
             or rx.search(e["title"])
             or any(rx.search(a) for a in e["aliases"])
+            or any(rx.search(a) for a in e["atoms"])
             or rx.search(e["summary"])
             or rx.search(body)
         )
@@ -421,6 +432,7 @@ def cmd_search(args) -> int:
     hits = []
     for slug, e, body, dl in docs:
         raw_score, matched, snippet = 0.0, 0, ""
+        matched_atoms: list[str] = []
         for rx, idf in zip(terms, idfs):
             if idf <= 0.0:
                 continue
@@ -431,6 +443,12 @@ def cmd_search(args) -> int:
                 field_s += 8.0
             if any(rx.search(a) for a in e["aliases"]):
                 field_s += 8.0
+            atom_hits = [a for a in e["atoms"] if rx.search(a)]
+            if atom_hits:
+                field_s += 6.0
+                for a in atom_hits:
+                    if a not in matched_atoms:
+                        matched_atoms.append(a)
             if rx.search(e["summary"]):
                 field_s += 4.0
             found = rx.findall(body)
@@ -448,16 +466,18 @@ def cmd_search(args) -> int:
             co_boost = raw_score * (1.0 + 0.5 * (matched - 1))
             recency = 1.0 if no_decay else _recency_weight(e["last_updated"], ref_date)
             score = round(co_boost * recency, 2)
-            hits.append((score, slug, e, snippet))
+            hits.append((score, slug, e, matched_atoms, snippet))
 
     if not hits:
         print("No matching pages.")
         return 1
     hits.sort(key=lambda h: (-h[0], h[1]))
-    for score, slug, e, snippet in hits[: args.limit]:
+    for score, slug, e, matched_atoms, snippet in hits[: args.limit]:
         print(f"[[{slug}]] score={score:.1f} updated={e['last_updated'] or '?'} — {e['title']}")
         if e["summary"]:
             print(f"    summary: {_one_line(e['summary'], 200)}")
+        for a in matched_atoms[:3]:
+            print(f"    atom:    {_one_line(a, 200)}")
         if snippet:
             print(f"    match:   {snippet}")
     print(f"\n{min(len(hits), args.limit)} of {len(hits)} matching page(s) shown")
@@ -565,6 +585,51 @@ def convert_legacy(text: str) -> tuple[str | None, str]:
     return "\n".join(fm + [lines[t], ""] + body), f"{len(sources)} source(s), {len(provenance)} provenance"
 
 
+def cmd_set_atoms(args) -> int:
+    slug = args.page.removesuffix(".md").removeprefix(f"{WIKI.name}/")
+    path = WIKI / f"{slug}.md"
+    if not path.is_file():
+        print(f"No page '{slug}'.", file=sys.stderr)
+        return 1
+    text = path.read_text()
+    if not text.startswith("---\n"):
+        print(f"{path.name} has no frontmatter (run convert-legacy --apply first).", file=sys.stderr)
+        return 1
+    try:
+        end = text.index("\n---\n", 4)
+    except ValueError:
+        print(f"{path.name} has malformed frontmatter.", file=sys.stderr)
+        return 1
+
+    fm_lines = text[4:end].splitlines()
+    body = text[end + 5:]
+    atoms_block = ["atoms:"] + [f"  - {_q(' '.join(a.split()))}" for a in args.atoms if a.strip()]
+
+    # Remove any existing atoms: block in frontmatter
+    cleaned: list[str] = []
+    i = 0
+    inserted = False
+    while i < len(fm_lines):
+        if re.match(r"^atoms\s*:", fm_lines[i]):
+            i += 1
+            while i < len(fm_lines) and fm_lines[i].startswith("  - "):
+                i += 1
+            cleaned.extend(atoms_block)
+            inserted = True
+            continue
+        if not inserted and re.match(r"^(sources|source_count|provenance|last_updated)\s*:", fm_lines[i]):
+            cleaned.extend(atoms_block)
+            inserted = True
+        cleaned.append(fm_lines[i])
+        i += 1
+    if not inserted:
+        cleaned.extend(atoms_block)
+
+    path.write_text("---\n" + "\n".join(cleaned) + "\n---\n" + body)
+    print(f"Set {len(atoms_block) - 1} atom(s) on {path.name}")
+    return 0
+
+
 def cmd_convert_legacy(args) -> int:
     done = skipped = 0
     for p in sorted(WIKI.glob("*.md")):
@@ -624,6 +689,10 @@ def main():
     idx_p.add_argument("--page", required=True)
     idx_p.add_argument("--description", required=True)
 
+    atoms_p = sub.add_parser("set-atoms", help="Write or replace the frontmatter atoms: list on a wiki page")
+    atoms_p.add_argument("page", help="Page slug or filename")
+    atoms_p.add_argument("atoms", nargs="+", help="Concise atoms: 'cmd: ...', 'fix: ...', 'decision: ...', 'fact: ...'")
+
     conv_p = sub.add_parser("convert-legacy", help="Convert legacy pages to frontmatter (dry run unless --apply)")
     conv_p.add_argument("--apply", action="store_true", help="Write the converted pages")
 
@@ -634,7 +703,8 @@ def main():
         sys.exit(cmd_lint(args))
     else:
         sys.exit({"search": cmd_search, "links": cmd_links, "sections": cmd_sections,
-                  "index-add": cmd_index_add, "convert-legacy": cmd_convert_legacy}[args.command](args))
+                  "index-add": cmd_index_add, "set-atoms": cmd_set_atoms,
+                  "convert-legacy": cmd_convert_legacy}[args.command](args))
 
 
 if __name__ == "__main__":

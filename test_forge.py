@@ -189,6 +189,20 @@ with tempfile.TemporaryDirectory() as d:
     for p in ["price-2023.md", "price-2026.md", "bloat.md", "rare.md", "case-endings.md", "class-notes.md", "undated.md", "typo-date.md"]:
         (own / "llmwiki" / p).unlink()
 
+    # atoms + lint migration: lint flags missing atoms (I), set-atoms populates frontmatter, search prints matched atoms
+    r_lint_i = sh(f'"{own}/wikictl" lint')
+    assert "I. Missing atoms (commands, error fixes, facts, decisions) (3)" in r_lint_i.stdout, r_lint_i.stdout
+    r_set = sh(f'"{own}/wikictl" set-atoms cutover "cmd: kubectl rollout restart deploy/api" "decision: cutover on Sunday because traffic is lowest"')
+    assert r_set.returncode == 0 and "Set 2 atom(s) on cutover.md" in r_set.stdout, r_set.stdout
+    r_lint_i2 = sh(f'"{own}/wikictl" lint')
+    assert "I. Missing atoms (commands, error fixes, facts, decisions) (2)" in r_lint_i2.stdout and "cutover.md — frontmatter 'atoms'" not in r_lint_i2.stdout, r_lint_i2.stdout
+    r_atom_search = sh(f'"{own}/wikictl" search "rollout|kubectl"')
+    assert "[[cutover]]" in r_atom_search.stdout and "atom:    cmd: kubectl rollout restart deploy/api" in r_atom_search.stdout, r_atom_search.stdout
+    # set-atoms replaces existing atoms idempotently
+    r_set2 = sh(f'"{own}/wikictl" set-atoms llmwiki/cutover.md "fact: maintenance window 02:00 UTC"')
+    assert r_set2.returncode == 0 and "Set 1 atom(s) on cutover.md" in r_set2.stdout, r_set2.stdout
+    assert "kubectl" not in (own / "llmwiki" / "cutover.md").read_text() and "maintenance window" in (own / "llmwiki" / "cutover.md").read_text()
+
     # adopt external: the work repo is untouched, lobe home links to it
     home = d / "lobes" / "_adopted" / "work-wiki"
     code, out = run("create", "--name", "work-wiki", "--purpose", "Team repo.", "--repo", str(work),

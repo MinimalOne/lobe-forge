@@ -64,8 +64,8 @@ No hits → retry once with broader terms. Still none → `"$W" sections`, then
 
 Read the hits whose summary, atom or snippet addresses the question (usually 1–3). Each hit
 reports `lines=<N>` and `[L<start>-<end> ## Section]` on its `match:` line: for a page over
-120 lines, pass that `offset` and `limit` directly to `Read` instead of running `grep` or
-reading the entire file.
+120 lines, call `Read` with `offset=<start>` and `limit=<end>-<start>+1` instead of running
+`grep` or reading the entire file.
 
 ### Step 3 — Follow links only when needed
 

@@ -216,6 +216,13 @@ with tempfile.TemporaryDirectory() as d:
     # search reports total line count and 1-based [L<start>-<end> ## Section] range on body matches
     r_loc = sh(f'"{own}/wikictl" search "old-page"')
     assert "lines=19 — Mixed; Page" in r_loc.stdout and "[L17-19 ## Body] Keep [[old-page]] text." in r_loc.stdout, r_loc.stdout
+    # a match on a heading line keeps that heading in the snippet
+    (own / "llmwiki" / "heads.md").write_text(
+        '---\ntitle: "Heads"\nsummary: "S."\nsources: []\nsource_count: 0\nprovenance:\n  - "chat"\n'
+        'last_updated: 2026-10-01\n---\n\n# Heads\n\n## Intro\n\nText.\n\n## Quokka setup\nSteps here.\n')
+    r_head = sh(f'"{own}/wikictl" search quokka')
+    assert "match:   [L17-18 ## Quokka setup] ## Quokka setup Steps here." in r_head.stdout, r_head.stdout
+    (own / "llmwiki" / "heads.md").unlink()
 
     # adopt external: the work repo is untouched, lobe home links to it
     home = d / "lobes" / "_adopted" / "work-wiki"

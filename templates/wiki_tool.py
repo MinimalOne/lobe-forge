@@ -420,8 +420,9 @@ def _locate_match(full_text: str, body: str, rx: re.Pattern) -> str:
                     sec_end = h2_indices[k + 1] if k + 1 < len(h2_indices) else n_lines
                 else:
                     break
-            ctx = [l.strip() for l in lines[max(body_start, idx - 1): min(n_lines, idx + 2)]
-                   if l.strip() and not re.match(r"^#+ ", l)]
+            # neighbouring headings are noise, but keep the matched line even when it is a heading
+            ctx = [lines[j].strip() for j in range(max(body_start, idx - 1), min(n_lines, idx + 2))
+                   if lines[j].strip() and (j == idx or not re.match(r"^#+ ", lines[j]))]
             win = " ".join(ctx) if ctx else lines[idx].strip()
             m = rx.search(win)
             raw_snip = win[max(0, m.start() - 70): m.end() + 70] if m else win

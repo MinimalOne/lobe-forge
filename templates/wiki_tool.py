@@ -443,26 +443,29 @@ def _locate_match(full_text: str, body: str, rx: re.Pattern) -> str:
 
 
 _STOPWORDS = {"the", "and", "for", "how", "what", "why", "when", "where", "which", "who", "with",
-              "does", "did", "can", "are", "was", "not", "this", "that", "from", "into", "about", "you", "your"}
+              "does", "did", "can", "are", "was", "not", "this", "that", "from", "into", "about", "you", "your",
+              "to", "in", "on", "at", "by", "of", "or", "is", "it", "as", "be", "do", "no", "so", "up", "if",
+              "my", "me", "we", "an", "am"}
 
 
-def _expand_terms(raw_terms: list[str]) -> list[tuple[re.Pattern, bool]]:
-    """Compile each term as (pattern, is_concept); multi-word plain phrases also yield whole-word
-    token patterns (stopwords and <3 chars dropped) that rank but don't count as extra concepts."""
-    out: list[tuple[re.Pattern, bool]] = []
+def _expand_terms(raw_terms: list[str]) -> list[tuple[re.Pattern, int]]:
+    """Compile each term as (pattern, concept index); multi-word plain phrases also yield whole-word
+    token patterns (stopwords and 1-char tokens dropped) under the same concept index, so a concept
+    matched only through its words still counts once toward the multi-concept boost."""
+    out: list[tuple[re.Pattern, int]] = []
     seen: set[str] = set()
-    for t in raw_terms:
+    for ci, t in enumerate(raw_terms):
         t = t.strip()
         if not t:
             continue
         if t.lower() not in seen:
             seen.add(t.lower())
-            out.append((_compile(t), True))
+            out.append((_compile(t), ci))
         if " " in t and "|" not in t:
             for tok in re.findall(r"[\w-]+", t):
-                if len(tok) >= 3 and tok.lower() not in _STOPWORDS and tok.lower() not in seen:
+                if len(tok) >= 2 and tok.lower() not in _STOPWORDS and tok.lower() not in seen:
                     seen.add(tok.lower())
-                    out.append((re.compile(rf"\b{re.escape(tok)}\b", re.IGNORECASE), False))
+                    out.append((re.compile(rf"\b{re.escape(tok)}\b", re.IGNORECASE), ci))
     return out
 
 
@@ -489,9 +492,10 @@ def _rank_docs(docs: list[tuple], raw_terms: list[str], ref_date: datetime.date,
 
     hits = []
     for slug, e, full_text, body, dl, total_lines in docs:
-        raw_score, matched, snippet = 0.0, 0, ""
+        raw_score, snippet = 0.0, ""
+        hit_concepts: set[int] = set()
         matched_atoms: list[str] = []
-        for (rx, is_concept), idf in zip(terms, idfs):
+        for (rx, ci), idf in zip(terms, idfs):
             if idf <= 0.0:
                 continue
             field_s = 0.0
@@ -514,12 +518,12 @@ def _rank_docs(docs: list[tuple], raw_terms: list[str], ref_date: datetime.date,
             body_bm25 = (tf * (k1 + 1.0)) / (tf + k1 * (1.0 - b + b * (dl / avgdl))) if tf else 0.0
             term_s = field_s + 2.0 * body_bm25
             if term_s > 0.0:
-                matched += is_concept
+                hit_concepts.add(ci)
                 raw_score += idf * term_s
                 if not snippet and found:
                     snippet = _locate_match(full_text, body, rx)
         if raw_score > 0.0:
-            co_boost = raw_score * (1.0 + 0.5 * max(0, matched - 1))
+            co_boost = raw_score * (1.0 + 0.5 * (len(hit_concepts) - 1))
             recency = 1.0 if no_decay else _recency_weight(e["last_updated"], ref_date)
             score = round(co_boost * recency, 2)
             hits.append((score, slug, e, total_lines, matched_atoms, snippet))

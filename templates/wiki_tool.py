@@ -442,26 +442,33 @@ def _locate_match(full_text: str, body: str, rx: re.Pattern) -> str:
     return _one_line(body[max(0, m.start() - 70): m.end() + 70], 170) if m else ""
 
 
-def cmd_search(args) -> int:
-    terms = [_compile(t) for t in args.terms]
-    docs = []
-    for p in _content_pages():
-        text = p.read_text()
-        e = parse_page(p, text)
-        _, body = parse_frontmatter(text)
-        body = re.sub(r"\A\s*# .*\n", "", body)  # H1 repeats the title; keep snippets informative
-        docs.append((p.stem, e, text, body, max(1, len(body.split())), len(text.splitlines())))
+def _expand_terms(raw_terms: list[str]) -> list[re.Pattern]:
+    """Compile each term; also split multi-word plain phrases into token patterns so non-contiguous matches rank."""
+    out: list[re.Pattern] = []
+    seen: set[str] = set()
+    for t in raw_terms:
+        t = t.strip()
+        if not t:
+            continue
+        if t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(_compile(t))
+        if " " in t and "|" not in t:
+            for tok in re.findall(r"[\w-]+", t):
+                if len(tok) >= 2 and tok.lower() not in seen:
+                    seen.add(tok.lower())
+                    out.append(_compile(tok))
+    return out
 
-    if not docs:
-        print("No matching pages.")
-        return 1
 
+def _rank_docs(docs: list[tuple], raw_terms: list[str], ref_date: datetime.date, no_decay: bool) -> list[tuple]:
+    terms = _expand_terms(raw_terms)
+    if not docs or not terms:
+        return []
     n_docs = len(docs)
     avgdl = sum(dl for _, _, _, _, dl, _ in docs) / n_docs
-    ref_date = datetime.date.today()  # not max(last_updated): one future-dated typo would age every page
     k1, b = 1.5, 0.75
 
-    # Inverse Document Frequency (BM25 Robertson-Spärck Jones IDF) per query concept
     idfs = []
     for rx in terms:
         df = sum(
@@ -475,7 +482,6 @@ def cmd_search(args) -> int:
         )
         idfs.append(math.log(1.0 + (n_docs - df + 0.5) / (df + 0.5)) if df else 0.0)
 
-    no_decay = getattr(args, "no_decay", False)
     hits = []
     for slug, e, full_text, body, dl, total_lines in docs:
         raw_score, matched, snippet = 0.0, 0, ""
@@ -508,17 +514,19 @@ def cmd_search(args) -> int:
                 if not snippet and found:
                     snippet = _locate_match(full_text, body, rx)
         if raw_score > 0.0:
-            # Pages matching more distinct query concepts outrank pages repeating a single concept
             co_boost = raw_score * (1.0 + 0.5 * (matched - 1))
             recency = 1.0 if no_decay else _recency_weight(e["last_updated"], ref_date)
             score = round(co_boost * recency, 2)
             hits.append((score, slug, e, total_lines, matched_atoms, snippet))
+    hits.sort(key=lambda h: (-h[0], h[1]))
+    return hits
 
+
+def _print_hits(hits: list[tuple], limit: int) -> None:
     if not hits:
         print("No matching pages.")
-        return 1
-    hits.sort(key=lambda h: (-h[0], h[1]))
-    for score, slug, e, total_lines, matched_atoms, snippet in hits[: args.limit]:
+        return
+    for score, slug, e, total_lines, matched_atoms, snippet in hits[:limit]:
         print(f"[[{slug}]] score={score:.1f} updated={e['last_updated'] or '?'} lines={total_lines} — {e['title']}")
         if e["summary"]:
             print(f"    summary: {_one_line(e['summary'], 200)}")
@@ -526,7 +534,33 @@ def cmd_search(args) -> int:
             print(f"    atom:    {_one_line(a, 200)}")
         if snippet:
             print(f"    match:   {snippet}")
-    print(f"\n{min(len(hits), args.limit)} of {len(hits)} matching page(s) shown")
+    print(f"\n{min(len(hits), limit)} of {len(hits)} matching page(s) shown")
+
+
+def cmd_search(args) -> int:
+    docs = []
+    for p in _content_pages():
+        text = p.read_text()
+        e = parse_page(p, text)
+        _, body = parse_frontmatter(text)
+        body = re.sub(r"\A\s*# .*\n", "", body)  # H1 repeats the title; keep snippets informative
+        docs.append((p.stem, e, text, body, max(1, len(body.split())), len(text.splitlines())))
+
+    ref_date = datetime.date.today()  # not max(last_updated): one future-dated typo would age every page
+    no_decay = getattr(args, "no_decay", False)
+    if getattr(args, "batch", False):
+        for idx, q in enumerate(args.terms):
+            if idx:
+                print()
+            print(f"=== query: {q} ===")
+            _print_hits(_rank_docs(docs, [q], ref_date, no_decay), args.limit)
+        return 0
+
+    hits = _rank_docs(docs, args.terms, ref_date, no_decay)
+    if not hits:
+        print("No matching pages.")
+        return 1
+    _print_hits(hits, args.limit)
     return 0
 
 
@@ -729,6 +763,7 @@ def main():
     search_p.add_argument("terms", nargs="+", help="One term per concept; aliases as alternation, e.g. 'eks|kubernetes'")
     search_p.add_argument("--limit", type=int, default=8)
     search_p.add_argument("--no-decay", action="store_true", help="Disable recency weighting on last_updated")
+    search_p.add_argument("--batch", action="store_true", help="Run each term as an independent candidate query in one call")
 
     links_p = sub.add_parser("links", help="Outgoing links with summaries + inbound links for a page")
     links_p.add_argument("page")

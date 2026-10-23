@@ -231,6 +231,15 @@ with tempfile.TemporaryDirectory() as d:
     assert "match:   [L13-19 ## Restart] ## step one # flush the quokkacache first sudo restart x" in r_code.stdout, r_code.stdout
     (own / "llmwiki" / "ops.md").unlink()
 
+    # multi-word phrase tokenization and --batch candidate search
+    r_phrase = sh(f'"{own}/wikictl" search "window 02:00"')
+    assert "[[cutover]]" in r_phrase.stdout, r_phrase.stdout
+    r_batch = sh(f'"{own}/wikictl" search --batch "cutover|rollout" "holiday" "nonexistent-candidate" --limit 3')
+    assert r_batch.returncode == 0, r_batch.stdout
+    assert "=== query: cutover|rollout ===" in r_batch.stdout and "[[cutover]]" in r_batch.stdout, r_batch.stdout
+    assert "=== query: holiday ===" in r_batch.stdout and "[[old-page]]" in r_batch.stdout, r_batch.stdout
+    assert "=== query: nonexistent-candidate ===\nNo matching pages." in r_batch.stdout, r_batch.stdout
+
     # adopt external: the work repo is untouched, lobe home links to it
     home = d / "lobes" / "_adopted" / "work-wiki"
     code, out = run("create", "--name", "work-wiki", "--purpose", "Team repo.", "--repo", str(work),

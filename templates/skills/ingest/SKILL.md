@@ -57,10 +57,10 @@ Read it in full. For images, describe what is shown and transcribe any text.
    concepts (ideas, decisions, procedures) the source **substantively discusses** — a
    paragraph, several bullets, or concrete facts, dates, numbers. Skip passing mentions.
    Note each candidate's slug and aliases (nicknames, abbreviations, other spellings).
-2. **Search once per candidate**, names and aliases as alternation:
+2. **Search all candidates in one `--batch` call**, names and aliases as alternation:
    ```bash
    W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
-   "$W" search "grandma|oma|maria" --limit 5
+   "$W" search --batch "grandma|oma|maria" "school|kita" --limit 5
    ```
 3. **Same, not related**: a candidate maps to an existing page only if both are the **same**
    thing. Different people, years, versions or sibling projects are separate pages. In doubt,

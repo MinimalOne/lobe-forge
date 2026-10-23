@@ -618,7 +618,8 @@ def cmd_set_atoms(args) -> int:
             i += 1
             while i < len(fm_lines) and fm_lines[i].startswith("  - "):
                 i += 1
-            cleaned.extend(atoms_block)
+            if not inserted:  # atoms: after sources:, or a duplicate atoms: key, must not add a second block
+                cleaned.extend(atoms_block)
             inserted = True
             continue
         if not inserted and re.match(r"^(sources|source_count|provenance|last_updated)\s*:", fm_lines[i]):

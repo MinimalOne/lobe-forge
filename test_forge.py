@@ -198,6 +198,14 @@ with tempfile.TemporaryDirectory() as d:
     assert "I. Missing atoms (commands, error fixes, facts, decisions) (2)" in r_lint_i2.stdout and "cutover.md — frontmatter 'atoms'" not in r_lint_i2.stdout, r_lint_i2.stdout
     r_atom_search = sh(f'"{own}/wikictl" search "rollout|kubectl"')
     assert "[[cutover]]" in r_atom_search.stdout and "atom:    cmd: kubectl rollout restart deploy/api" in r_atom_search.stdout, r_atom_search.stdout
+    # an atoms: block after sources: (or duplicated) is replaced once, not added twice
+    (own / "llmwiki" / "late-atoms.md").write_text(
+        '---\ntitle: "Late"\nsummary: "S."\nsources: []\nsource_count: 0\nprovenance:\n  - "chat"\n'
+        'last_updated: 2026-10-01\natoms:\n  - "fact: old"\natoms:\n  - "fact: dup"\n---\n\n# Late\n\nBody.\n')
+    assert sh(f'"{own}/wikictl" set-atoms late-atoms "fact: new"').returncode == 0
+    late = (own / "llmwiki" / "late-atoms.md").read_text()
+    assert late.count("atoms:") == 1 and "fact: new" in late and "old" not in late and "dup" not in late, late
+    (own / "llmwiki" / "late-atoms.md").unlink()
     r_blank = sh(f'"{own}/wikictl" set-atoms cutover "  "')
     assert r_blank.returncode == 1 and "No non-blank atoms" in r_blank.stderr and "kubectl" in (own / "llmwiki" / "cutover.md").read_text(), r_blank.stderr
     # set-atoms replaces existing atoms idempotently

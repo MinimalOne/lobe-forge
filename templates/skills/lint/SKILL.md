@@ -82,6 +82,7 @@ python3 -c "import json,collections as C;m=C.defaultdict(list);[m[s].append(e['p
 ### B. Orphans (N)
 ### D. Index (N)
 ### I. Missing atoms (N)
+### Pending raw sources (N)   ← from `pending`; offer `/{{NAME}}-ingest`
 ### E. Possibly outdated (N)
 ### F. Contradictions (N)
 

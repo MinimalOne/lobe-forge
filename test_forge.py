@@ -261,13 +261,13 @@ with tempfile.TemporaryDirectory() as d:
     assert "=== query: holiday ===" in r_batch.stdout and "[[old-page]]" in r_batch.stdout, r_batch.stdout
     assert "=== query: nonexistent-candidate ===\nNo matching pages." in r_batch.stdout, r_batch.stdout
 
-    # pending: detects un-ingested raw files and raw files captured after the citing page's last_updated
+    # pending: lists raw files no page cites
     assert "No pending raw sources." in sh(f'"{own}/wikictl" pending').stdout
     (own / "docs" / "2026-10-20-fresh-notes.md").write_text("---\nsource: typed\ncaptured: 2026-10-20\n---\nNew.\n")
     (own / "docs" / "trip.md").write_text("---\nsource: url\ncaptured: 2026-05-01\n---\nUpdated trip.\n")
     r_pend = sh(f'"{own}/wikictl" pending')
     assert "Un-ingested raw sources (1):\n  docs/2026-10-20-fresh-notes.md" in r_pend.stdout, r_pend.stdout
-    assert "Updated since page last_updated (1):\n  docs/trip.md (captured 2026-05-01) -> llmwiki/old-page.md (last_updated 2025-01-01)" in r_pend.stdout, r_pend.stdout
+    assert "docs/trip.md" not in r_pend.stdout, r_pend.stdout
     (own / "docs" / "2026-10-20-fresh-notes.md").unlink()
     (own / "docs" / "trip.md").write_text("src")
 

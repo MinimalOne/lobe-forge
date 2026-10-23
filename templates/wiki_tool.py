@@ -10,7 +10,7 @@ Commands:
   sections        List index.md section headings
   index-add       Insert one row into an index.md section without reading the whole index
   set-atoms       Write or replace the frontmatter atoms: list on a wiki page
-  pending         List raw/ sources not yet ingested or updated since page last_updated
+  pending         List raw/ sources not cited by any wiki page
   convert-legacy  Move legacy bold Summary/Sources/Last updated lines into frontmatter
 
 Paths default to this repo's layout (wiki/, raw/). Override with WIKI_ROOT, WIKI_DIR,
@@ -725,60 +725,26 @@ def cmd_set_atoms(args) -> int:
     return 0
 
 
-def _raw_captured_date(path: Path) -> datetime.date | None:
-    """Extract captured: YYYY-MM-DD from raw frontmatter or a leading YYYY-MM-DD filename prefix."""
-    m = re.match(r"^(\d{4}-\d{2}-\d{2})\b", path.name)
-    if m:
-        d = _parse_date(m.group(1))
-        if d is not None:
-            return d
-    try:
-        head = path.read_text(errors="ignore")[:512]
-    except OSError:
-        return None
-    fm, _ = parse_frontmatter(head)
-    if fm and fm.get("captured"):
-        return _parse_date(str(fm["captured"]))
-    return None
-
-
 def cmd_pending(_args) -> int:
     if not RAW.is_dir():
         print("No pending raw sources.")
         return 0
-    cited: dict[str, list[tuple[str, str]]] = {}
-    for p in _content_pages():
-        e = parse_page(p)
-        for src in e["sources"]:
-            cited.setdefault(src, []).append((e["page"], e["last_updated"]))
+    cited = {src for p in _content_pages() for src in parse_page(p)["sources"]}
 
     uningested: list[str] = []
-    stale: list[tuple[str, str, str, str]] = []
     for f in sorted(RAW.rglob("*")):
         if not f.is_file() or any(part.startswith(".") for part in f.relative_to(RAW).parts):
             continue
         rel = f.relative_to(REPO).as_posix()
         if rel not in cited:
             uningested.append(rel)
-            continue
-        cap = _raw_captured_date(f)
-        if cap is not None:
-            for pg, upd in cited[rel]:
-                upd_d = _parse_date(upd)
-                if upd_d is not None and cap > upd_d:
-                    stale.append((rel, cap.isoformat(), pg, upd))
 
-    if not uningested and not stale:
+    if not uningested:
         print("No pending raw sources.")
         return 0
-    if uningested:
-        print(f"Un-ingested raw sources ({len(uningested)}):")
-        for r in uningested:
-            print(f"  {r}")
-    if stale:
-        print(f"Updated since page last_updated ({len(stale)}):")
-        for r, cap_s, pg, upd in stale:
-            print(f"  {r} (captured {cap_s}) -> {pg} (last_updated {upd})")
+    print(f"Un-ingested raw sources ({len(uningested)}):")
+    for r in uningested:
+        print(f"  {r}")
     return 0
 
 
@@ -846,7 +812,7 @@ def main():
     atoms_p.add_argument("page", help="Page slug or filename")
     atoms_p.add_argument("atoms", nargs="+", help="Concise atoms: 'cmd: ...', 'fix: ...', 'decision: ...', 'fact: ...'")
 
-    sub.add_parser("pending", help="List raw/ files not yet ingested or newer than citing pages")
+    sub.add_parser("pending", help="List raw/ files not cited by any wiki page")
 
     conv_p = sub.add_parser("convert-legacy", help="Convert legacy pages to frontmatter (dry run unless --apply)")
     conv_p.add_argument("--apply", action="store_true", help="Write the converted pages")

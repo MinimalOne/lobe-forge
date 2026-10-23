@@ -37,8 +37,8 @@ Page format and rules: `$LOBE/LOBE.md` (read it once per session if unsure).
 
 ## Inputs
 
-- **Source**: a path in `{{RAW}}/` (if missing, run `"$W" pending` to list un-ingested and updated
-  raw sources, then ask with `AskUserQuestion`).
+- **Source**: a path in `{{RAW}}/` (if missing, run `"$W" pending` to list raw sources no page
+  cites yet, then ask with `AskUserQuestion`).
   Markdown, text, PDF, images and docs are all read with `Read`; read large files in sections.
 
 ## Workflow

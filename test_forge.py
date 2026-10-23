@@ -146,6 +146,10 @@ with tempfile.TemporaryDirectory() as d:
     (own / "llmwiki" / "price-2026.md").write_text(
         '---\ntitle: "Pricing Plan"\nsummary: "Tier pricing details."\nsources: []\nsource_count: 0\n'
         'provenance:\n  - "chat"\nlast_updated: 2026-10-15\n---\n\n# Pricing Plan\n\nWidget tariff is $25.\n')
+    # a future-dated typo elsewhere must not push every page to the decay floor
+    (own / "llmwiki" / "typo-date.md").write_text(
+        '---\ntitle: "Typo"\nsummary: "S."\nsources: []\nsource_count: 0\n'
+        'provenance:\n  - "chat"\nlast_updated: 2099-01-01\n---\n\n# Typo\n\nNothing.\n')
     r_dec = sh(f'"{own}/wikictl" search tariff')
     hits_dec = [l for l in r_dec.stdout.splitlines() if l.startswith("[[")]
     assert hits_dec[0].startswith("[[price-2026]]") and hits_dec[1].startswith("[[price-2023]]"), r_dec.stdout
@@ -182,7 +186,7 @@ with tempfile.TemporaryDirectory() as d:
     assert hits_cap[0].startswith("[[case-endings]]"), r_cap.stdout
     # undated ties the newest page (same score) instead of being penalised
     assert len({l.split()[1] for l in hits_cap[1:]}) == 1, r_cap.stdout
-    for p in ["price-2023.md", "price-2026.md", "bloat.md", "rare.md", "case-endings.md", "class-notes.md", "undated.md"]:
+    for p in ["price-2023.md", "price-2026.md", "bloat.md", "rare.md", "case-endings.md", "class-notes.md", "undated.md", "typo-date.md"]:
         (own / "llmwiki" / p).unlink()
 
     # adopt external: the work repo is untouched, lobe home links to it

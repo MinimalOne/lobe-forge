@@ -388,15 +388,11 @@ def _recency_weight(date_str: str, ref_date: datetime.date) -> float:
 def cmd_search(args) -> int:
     terms = [_compile(t) for t in args.terms]
     docs = []
-    dates = [datetime.date.today()]
     for p in _content_pages():
         text = p.read_text()
         e = parse_page(p, text)
         _, body = parse_frontmatter(text)
         body = re.sub(r"\A\s*# .*\n", "", body)  # H1 repeats the title; keep snippets informative
-        d = _parse_date(e["last_updated"])
-        if d is not None:
-            dates.append(d)
         docs.append((p.stem, e, body, max(1, len(body.split()))))
 
     if not docs:
@@ -405,7 +401,7 @@ def cmd_search(args) -> int:
 
     n_docs = len(docs)
     avgdl = sum(dl for _, _, _, dl in docs) / n_docs
-    ref_date = max(dates)
+    ref_date = datetime.date.today()  # not max(last_updated): one future-dated typo would age every page
     k1, b = 1.5, 0.75
 
     # Inverse Document Frequency (BM25 Robertson-Spärck Jones IDF) per query concept

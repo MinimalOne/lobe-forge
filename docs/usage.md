@@ -165,13 +165,20 @@ When `LOBE_GIT_TOKEN` is set, `lobe-server` injects an `http.extraHeader=Authori
 
 `lobe-server` selects the HTTP Basic username prefix automatically from the remote URL:
 
-| Git Provider | `LOBE_GIT_TOKEN` Format | Basic Auth Prefix Used |
-| :--- | :--- | :--- |
-| **GitHub** (`github.com`) | `<token>` (classic `ghp_...` or fine-grained `github_pat_...` with `Contents: Read and write`) | `x-access-token:<token>` |
-| **Codeberg / Forgejo / Gitea** | `<token>` | `x-access-token:<token>` |
-| **GitLab** (`gitlab.com` or self-hosted) | `<token>` (or `oauth2:<token>`) | `oauth2:<token>` |
-| **Bitbucket Cloud** (`bitbucket.org`) | Repository Token `<token>`, or `username:app_password` | `x-token-auth:<token>` (or `username:app_password`) |
-| **Any HTTPS Git Server** | `username:password` (explicit colon) | `username:password` |
+| Git Provider | `LOBE_GIT_TOKEN` Format | Minimum Token Permissions | Basic Auth Prefix Used |
+| :--- | :--- | :--- | :--- |
+| **GitHub** (`github.com`) | `<token>` (Fine-grained `github_pat_...` or classic `ghp_...`) | **Fine-grained PAT**: `Contents: Read and write`, `Metadata: Read-only` (required, added automatically), everything else at `No access`. **Classic PAT**: `repo` scope. | `x-access-token:<token>` |
+| **Codeberg / Forgejo / Gitea** | `<token>` | `repository: read and write` | `x-access-token:<token>` |
+| **GitLab** (`gitlab.com` or self-hosted) | `<token>` (or `oauth2:<token>`) | `read_repository`, `write_repository` | `oauth2:<token>` |
+| **Bitbucket Cloud** (`bitbucket.org`) | Repository Token `<token>`, or `username:app_password` | `Repositories: Read and Write` | `x-token-auth:<token>` (or `username:app_password`) |
+| **Any HTTPS Git Server** | `username:password` (explicit colon) | Repository read/write access | `username:password` |
+
+### GitHub Fine-Grained Personal Access Token Setup
+
+When you create a Fine-Grained Personal Access Token on GitHub (`Settings` → `Developer settings` → `Personal access tokens` → `Fine-grained tokens`), set these repository permissions on the token form:
+- **Contents**: `Read and write`
+- **Metadata**: `Read-only` (required, added automatically)
+- **Everything else**: Leave at `No access`
 
 ### Using SSH Keys Instead of `LOBE_GIT_TOKEN`
 

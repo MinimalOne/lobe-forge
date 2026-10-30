@@ -90,6 +90,15 @@ docker pull ghcr.io/minimalone/lobe-forge:latest
 docker compose -f server/docker-compose.yml up -d
 ```
 
+#### Remote Git Token (`LOBE_GIT_TOKEN`) Permissions
+
+If you configure `LOBE_GIT_TOKEN` so `lobe-server` can clone, pull, and push lobe repositories over HTTPS, grant only the minimum repository permissions on the token form. For example, for a **GitHub Fine-Grained Personal Access Token**:
+- **Contents**: `Read and write`
+- **Metadata**: `Read-only` (required, added automatically)
+- **Everything else**: `No access`
+
+See [Git Configuration and Authentication in `docs/usage.md`](docs/usage.md#git-configuration-and-authentication) for Codeberg/Forgejo, GitLab, Bitbucket, and SSH key setups.
+
 ### 2. Connect Your AI Clients to `lobe-server`
 
 ```bash

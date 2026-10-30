@@ -1,0 +1,48 @@
+services:
+  lobe-server:
+    image: ghcr.io/minimalone/lobe-forge:latest
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    container_name: lobe-server
+    restart: unless-stopped
+    ports:
+      - "${LOBE_PORT:-8080}:8080"
+    environment:
+      - LOBES_DIR=/data/lobes
+      - LOBE_API_TOKEN=${LOBE_API_TOKEN:-}
+      - LOBE_GIT_PUSH=${LOBE_GIT_PUSH:-0}
+      - LOBE_GIT_TOKEN=${LOBE_GIT_TOKEN:-}
+    volumes:
+      - lobes_data:/data/lobes
+
+  # Optional: start SilverBullet web UI mounted on the same /data/lobes volume
+  # Run with: docker compose --profile webui up -d
+  silverbullet:
+    image: zefhemel/silverbullet:v2
+    container_name: lobe-silverbullet
+    profiles: ["webui"]
+    restart: unless-stopped
+    ports:
+      - "${SILVERBULLET_PORT:-3001}:3000"
+    volumes:
+      - lobes_data:/space
+
+  # Optional: start Forgejo local Git forge (supports Web UI Push Mirrors to GitHub/GitLab)
+  # Run with: docker compose --profile forgejo up -d
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:10
+    container_name: lobe-forgejo
+    profiles: ["forgejo"]
+    restart: unless-stopped
+    ports:
+      - "${FORGEJO_PORT:-3002}:3000"
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+    volumes:
+      - forgejo_data:/data
+
+volumes:
+  lobes_data:
+  forgejo_data:

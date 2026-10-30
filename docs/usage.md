@@ -89,3 +89,26 @@ old home, then `create` in the new repo with `--origin "<where the content came 
 `create` or `upgrade`). `/lobe-forge` offers to publish a lobe to your GitHub only when its
 content is yours, so a wiki adopted from an employer repo is never pushed to a personal
 account. Published lobes are private unless you ask otherwise.
+
+## Self-hosted remote server (`server/`)
+
+`server/app.py` hosts lobes on a remote machine (e.g. a Raspberry Pi or home server) over an
+HTTP REST API and a Model Context Protocol (MCP) server (`POST /mcp` or `--stdio`), using the
+same `wiki_tool.py` search, link, and lint engine:
+
+- **Local-first Git**: every change is committed locally inside `LOBES_DIR/<lobe>`.
+- **Optional remote push**: remote `git push` is skipped unless a remote URL (`origin`) is
+  configured and auto-push (`lobe.autopush` or `LOBE_GIT_PUSH=1`) is enabled.
+
+```bash
+# Run with Docker Compose (mounts /data/lobes)
+docker compose -f server/docker-compose.yml up -d
+
+# Optional: also start SilverBullet web UI or Forgejo local Git forge
+docker compose -f server/docker-compose.yml --profile webui up -d
+docker compose -f server/docker-compose.yml --profile forgejo up -d
+
+# Run directly over HTTP or MCP stdio
+LOBES_DIR=~/lobes python3 server/app.py --port 8080
+LOBES_DIR=~/lobes python3 server/app.py --stdio
+```

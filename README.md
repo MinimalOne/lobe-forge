@@ -83,8 +83,8 @@ overwrites or deletes files it generated, never wiki pages or sources, and shows
 | Ask, with citations (good answers can be saved as pages) | `/personal-ask when does the lease end?` |
 | Check the wiki: format, links, index, stale pages, contradictions | `/personal-lint` |
 
-See [docs/usage.md](docs/usage.md) for the lobe layout, what each task does, and the
-underlying `forge.py` commands.
+See [docs/usage.md](docs/usage.md) for the lobe layout, what each task does, the
+underlying `forge.py` commands, and the optional self-hosted REST API / MCP server in `server/`.
 
 ## Contributing
 

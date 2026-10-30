@@ -197,7 +197,8 @@ When you configure a remote (`create_lobe` with `remote_url` or `configure_remot
 | :--- | :--- | :--- |
 | `GET` | `/health` | Public health check. Returns `{"status": "ok"}`. |
 | `GET` | `/api/lobes` | List all lobes in `LOBES_DIR` with remote URL and `autopush` status. |
-| `POST` | `/api/lobes` | Create a new lobe or clone an existing non-empty `remote_url`. Body: `{"name", "purpose", "remote_url?", "autopush?"}`. |
+| `POST` | `/api/lobes` | Create a new lobe or clone an existing non-empty `remote_url`. Body: `{"name", "purpose", "remote_url?", "autopush?", "generate_skills?", "skill_mode?"}`. |
+| `GET` | `/api/lobes/{lobe}/skills?mode=mcp` | Generate the four `<name>-{add-raw,ingest,ask,lint}/SKILL.md` files for an existing lobe (`mode=mcp` or `mode=local`). |
 | `PUT` | `/api/lobes/{lobe}/remote` | Set or update `origin` remote URL and `autopush` flag. Body: `{"remote_url?", "autopush?"}`. |
 | `POST` | `/api/lobes/{lobe}/sync` | Fetch and rebase (`git pull --rebase`) from `origin`, and optionally push. Body: `{"push?"}`. Returns `409 Conflict` and aborts cleanly if a rebase conflict occurs. |
 | `GET` | `/api/lobes/{lobe}/search?q=a|b&limit=5` | Search wiki pages (`q` accepts pipe-separated terms; repeat `q` for batch search). |
@@ -205,9 +206,10 @@ When you configure a remote (`create_lobe` with `remote_url` or `configure_remot
 | `GET` | `/api/lobes/{lobe}/sections` | List `## Section` headings in `wiki/index.md`. |
 | `GET` | `/api/lobes/{lobe}/pending` | List files in `raw/` that no wiki page cites in `sources:`. |
 | `GET` | `/api/lobes/{lobe}/lint?strict=true` | Run deterministic wiki health checks (`returncode: 0` when clean). |
-| `POST` | `/api/lobes/{lobe}/raw` | Write a raw source file to `raw/` and commit. Body: `{"filename", "content", "message?"}`. |
+| `POST` | `/api/lobes/{lobe}/raw` | Write a raw source file to `raw/` and commit. Body: `{"filename", "content"}`. |
+| `GET` | `/api/lobes/{lobe}/raw/{filename}` | Read a raw source file from `raw/{filename}`. |
 | `GET` | `/api/lobes/{lobe}/pages/{slug}` | Read `wiki/{slug}.md` and return its content. |
-| `PUT` | `/api/lobes/{lobe}/pages/{slug}` | Create or update `wiki/{slug}.md`, optionally register it in `wiki/index.md` (`section` + `description`), and commit. Body: `{"content", "section?", "description?", "message?"}`. |
+| `PUT` | `/api/lobes/{lobe}/pages/{slug}` | Create or update `wiki/{slug}.md`, optionally register it in `wiki/index.md` (`section` + `description`), optionally append `log_entry` to `wiki/log.md`, and commit. |
 | `POST` | `/mcp` | Streamable HTTP Model Context Protocol (MCP) JSON-RPC 2.0 endpoint. |
 
 ### REST API Examples
@@ -246,17 +248,19 @@ curl -s -X POST https://lobes.example.com/api/lobes/hack/sync \
 | Tool Name | Required Arguments | Optional Arguments | Description |
 | :--- | :--- | :--- | :--- |
 | `lobe_list` | *(none)* | *(none)* | List all lobes on the server. |
-| `lobe_create` | `name`, `purpose` | `remote_url`, `autopush` | Create a new lobe or clone an existing remote repository. |
+| `lobe_create` | `name`, `purpose` | `remote_url`, `autopush`, `generate_skills`, `skill_mode` | Create a new lobe or clone an existing remote repository. Ask the user whether to also generate client skills (`generate_skills=true`). |
+| `lobe_generate_skills` | `lobe` | `mode` (`"mcp"` or `"local"`) | Generate the four `<name>-{add-raw,ingest,ask,lint}/SKILL.md` files for any existing lobe on `lobe-server`. |
 | `lobe_configure_remote` | `lobe` | `remote_url`, `autopush` | Configure the Git `origin` URL and `lobe.autopush` setting. |
 | `lobe_sync` | `lobe` | `push` | Run `git fetch` and `git pull --rebase` from `origin`, and push if enabled. |
-| `lobe_search` | `lobe`, `terms` | `limit` | Search wiki pages (`terms` is an array of strings or `a|b` alternations). |
+| `lobe_search` | `lobe`, `terms` | `no_decay` | Search wiki pages (`terms` is an array of strings or `a|b` alternations). |
 | `lobe_links` | `lobe`, `page` | *(none)* | Show incoming and outgoing `[[wikilinks]]` for a page. |
 | `lobe_sections` | `lobe` | *(none)* | List `## Section` headings in `wiki/index.md`. |
 | `lobe_pending` | `lobe` | *(none)* | List raw source files in `raw/` that no wiki page cites yet. |
 | `lobe_lint` | `lobe` | `strict` | Run deterministic `wiki_tool.py lint` checks. |
-| `lobe_add_raw` | `lobe`, `filename`, `content` | `message` | Save a source file in `raw/`, commit to Git, and push if enabled. |
+| `lobe_add_raw` | `lobe`, `filename`, `content` | *(none)* | Save a source file in `raw/`, commit to Git, and push if enabled. |
+| `lobe_read_raw` | `lobe`, `filename` | *(none)* | Read the content of `raw/<filename>` from `lobe-server`. |
 | `lobe_read_page` | `lobe`, `slug` | *(none)* | Read the markdown content of `wiki/<slug>.md`. |
-| `lobe_write_page` | `lobe`, `slug`, `content` | `section`, `description`, `message` | Write `wiki/<slug>.md`, optionally add to `wiki/index.md`, commit, and push if enabled. |
+| `lobe_write_page` | `lobe`, `slug`, `content` | `section`, `description`, `log_entry` | Write `wiki/<slug>.md`, optionally add to `wiki/index.md` and append `log_entry` to `wiki/log.md`, commit, and push if enabled. |
 
 ---
 

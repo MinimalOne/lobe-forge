@@ -94,6 +94,21 @@ def render(text: str, **values: str) -> str:
     return text
 
 
+def render_skills(name: str, purpose: str, wiki_dir: str = "wiki", raw_dir: str = "raw",
+                  mode: str = "local", external: bool = False, origin: str = "new") -> dict[str, str]:
+    """Render the four <name>-{add-raw,ingest,ask,lint}/SKILL.md files in 'local' or 'mcp' mode."""
+    if mode not in ("local", "mcp"):
+        raise ValueError(f"Unsupported skill mode: {mode!r} (expected 'local' or 'mcp')")
+    values = dict(NAME=name, PURPOSE=purpose, WIKI=wiki_dir, RAW=raw_dir, ORIGIN=origin,
+                  REPO_LINK="repo" if external else ".",
+                  COMMIT_RULE=COMMIT_EXTERNAL if external else COMMIT_IN_PLACE)
+    tpl_root = TEMPLATES / ("mcp-skills" if mode == "mcp" else "skills")
+    return {
+        f"{name}-{kind}/SKILL.md": render((tpl_root / kind / "SKILL.md").read_text(), **values)
+        for kind in KINDS
+    }
+
+
 def generated_files(name: str, purpose: str, wiki_dir: str, raw_dir: str, external: bool,
                     origin: str) -> dict[str, tuple[str, int | None]]:
     """Every file forge renders into a lobe home: relative path -> (text, mode)."""
@@ -105,9 +120,9 @@ def generated_files(name: str, purpose: str, wiki_dir: str, raw_dir: str, extern
         "wikictl": (render((TEMPLATES / "wikictl").read_text(), **values), 0o755),
         "LOBE.md": (render((TEMPLATES / "LOBE.md").read_text(), **values), None),
     }
-    for kind in KINDS:
-        tpl = (TEMPLATES / "skills" / kind / "SKILL.md").read_text()
-        files[f"skills/{name}-{kind}/SKILL.md"] = (render(tpl, **values), None)
+    for rel, text in render_skills(name, purpose, wiki_dir, raw_dir, mode="local",
+                                   external=external, origin=origin).items():
+        files[f"skills/{rel}"] = (text, None)
     return files
 
 

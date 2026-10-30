@@ -361,3 +361,26 @@ If your lobes are stored on the same machine as your AI client, you can run `ser
   }
 }
 ```
+
+---
+
+## Using `/lobe-forge` Skills and `lobe-server` Together
+
+Generated `/<name>-*` skills and `lobe-server` MCP tools operate on the same Git repository structure and `wiki_tool.py` CLI.
+
+### Workflow Comparison
+
+| Operation | Local Skill Command | Remote MCP Tool Sequence |
+| :--- | :--- | :--- |
+| Create or clone a lobe | `/lobe-forge` | `lobe_create(name, purpose, remote_url, autopush)` |
+| Save a raw source | `/<name>-add-raw <url-or-file>` | `lobe_add_raw(lobe, filename, content)` |
+| Ingest a source into wiki pages | `/<name>-ingest raw/<file>` | `lobe_pending` → `lobe_search` → `lobe_read_page` → `lobe_sections` → `lobe_write_page` → `lobe_lint` |
+| Answer a question with citations | `/<name>-ask <question>` | `lobe_search(lobe, terms)` → `lobe_links(lobe, page)` → `lobe_read_page(lobe, slug)` |
+| Audit wiki health | `/<name>-lint` | `lobe_lint(lobe, strict=true)` |
+| Synchronize with Git remote | `git pull --rebase && git push` | `lobe_sync(lobe, push=true)` |
+
+### Keeping Local Skills and Remote `lobe-server` in Sync
+
+1. Enable auto-push on `lobe-server` (`LOBE_GIT_PUSH=1` or `"autopush": true` when calling `lobe_create` / `lobe_configure_remote`). Every MCP write commits and pushes to `origin` immediately.
+2. Before you run `/<name>-ingest` on a local clone, pull the latest commits from `origin` (`git -C ~/lobes/<name> pull --rebase`).
+3. After you push local skill commits to `origin`, call `lobe_sync` (`{"lobe": "<name>"}`) so `lobe-server` pulls and rebases onto the new commits.

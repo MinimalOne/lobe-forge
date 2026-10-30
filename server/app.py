@@ -21,7 +21,21 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 FORGE_SCRIPT = ROOT / "scripts" / "forge.py"
+PLUGIN_JSON = ROOT / ".claude-plugin" / "plugin.json"
 NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
+import forge  # noqa: E402
+
+
+def server_version() -> str:
+    if PLUGIN_JSON.exists():
+        try:
+            return json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))["version"]
+        except Exception:
+            pass
+    return os.environ.get("LOBE_SERVER_VERSION", "1.9.0")
 
 
 def lobes_root() -> Path:
@@ -197,7 +211,58 @@ def list_lobes() -> list[dict[str, Any]]:
     return items
 
 
-def create_lobe(name: str, purpose: str, remote_url: str | None = None, autopush: bool = False) -> dict[str, Any]:
+def generate_lobe_skills(lobe: str, mode: str = "mcp") -> dict[str, Any]:
+    """Render the four <name>-{add-raw,ingest,ask,lint} skills for an existing lobe on lobe-server."""
+    lobe_dir = resolve_lobe(lobe)
+    paths = l_paths(lobe)
+    repo = paths["REPO"]
+    wiki_rel = str(paths["WIKI"].relative_to(repo))
+    raw_rel = str(paths["RAW"].relative_to(repo))
+
+    purpose = f"{lobe} lobe wiki"
+    origin = "new"
+    lobe_md = lobe_dir / "LOBE.md"
+    if lobe_md.exists():
+        for line in lobe_md.read_text(encoding="utf-8").splitlines():
+            if line.startswith("**Purpose**:"):
+                purpose = line.split("**Purpose**:", 1)[1].strip() or purpose
+            elif line.startswith("**Origin**:"):
+                origin = line.split("**Origin**:", 1)[1].strip() or origin
+
+    skills = forge.render_skills(
+        name=lobe,
+        purpose=purpose,
+        wiki_dir=wiki_rel,
+        raw_dir=raw_rel,
+        mode=mode,
+        external=False,
+        origin=origin,
+    )
+    skill_names = [f"{lobe}-{k}" for k in forge.KINDS]
+    return {
+        "lobe": lobe,
+        "purpose": purpose,
+        "mode": mode,
+        "skill_names": skill_names,
+        "skills": skills,
+        "install_instructions": (
+            "Write each '<skill_name>/SKILL.md' entry in 'skills' into the user's selected local AI "
+            "skill directories (for example: ~/.claude/skills/<skill_name>/SKILL.md, "
+            "~/.claude-personal/skills/<skill_name>/SKILL.md, "
+            "~/.gemini/config/skills/<skill_name>/SKILL.md, or "
+            "~/.gemini-personal/.gemini/config/skills/<skill_name>/SKILL.md)."
+        ),
+    }
+
+
+def create_lobe(
+    name: str,
+    purpose: str,
+    remote_url: str | None = None,
+    autopush: bool = False,
+    generate_skills: bool = False,
+    skill_mode: str = "mcp",
+) -> dict[str, Any]:
     if not NAME_RE.match(name):
         raise ValueError(f"Invalid lobe name: {name!r} (expected lowercase letters, digits, hyphens)")
     repo_dir = lobes_root() / name
@@ -231,7 +296,14 @@ def create_lobe(name: str, purpose: str, remote_url: str | None = None, autopush
         configure_remote(name, remote_url=remote_url, autopush=autopush, verify=False)
 
     git_info = git_commit_and_optional_push(repo_dir, f"lobe: initialize {name}")
-    return {"name": name, "purpose": purpose, "repo": str(repo_dir), "cloned": cloned, **git_info}
+    out: dict[str, Any] = {"name": name, "purpose": purpose, "repo": str(repo_dir), "cloned": cloned, **git_info}
+    if generate_skills:
+        skill_data = generate_lobe_skills(name, mode=skill_mode)
+        out["skill_mode"] = skill_data["mode"]
+        out["skill_names"] = skill_data["skill_names"]
+        out["skills"] = skill_data["skills"]
+        out["install_instructions"] = skill_data["install_instructions"]
+    return out
 
 
 def configure_remote(
@@ -317,6 +389,22 @@ def add_raw(lobe: str, filename: str, content: str) -> dict[str, Any]:
     return {"lobe": lobe, "path": rel, **git_info}
 
 
+def read_raw(lobe: str, filename: str) -> dict[str, Any]:
+    safe_name = Path(filename).name
+    if not safe_name or safe_name in (".", ".."):
+        raise ValueError(f"Invalid raw filename: {filename!r}")
+    paths = l_paths(lobe)
+    raw_file = paths["RAW"] / safe_name
+    if not raw_file.exists():
+        raise FileNotFoundError(f"Raw source {safe_name!r} not found in lobe {lobe!r}")
+    return {
+        "lobe": lobe,
+        "filename": safe_name,
+        "path": str(raw_file.relative_to(paths["REPO"])),
+        "content": raw_file.read_text(encoding="utf-8", errors="replace"),
+    }
+
+
 def read_page(lobe: str, slug: str) -> dict[str, Any]:
     clean_slug = Path(slug).stem
     paths = l_paths(lobe)
@@ -337,6 +425,7 @@ def write_page(
     content: str,
     section: str | None = None,
     description: str | None = None,
+    log_entry: str | None = None,
 ) -> dict[str, Any]:
     clean_slug = Path(slug).stem
     if not NAME_RE.match(clean_slug):
@@ -353,6 +442,13 @@ def write_page(
             raise RuntimeError((idx["stderr"] or idx["stdout"]).strip())
         staged.append(str((paths["WIKI"] / "index.md").relative_to(paths["REPO"])))
 
+    if log_entry and log_entry.strip():
+        log_file = paths["WIKI"] / "log.md"
+        existing_log = log_file.read_text(encoding="utf-8") if log_file.exists() else f"# {lobe.title()} Wiki — Log\n"
+        sep = "\n" if existing_log.endswith("\n") else "\n\n"
+        log_file.write_text(existing_log + sep + log_entry.strip() + "\n", encoding="utf-8")
+        staged.append(str(log_file.relative_to(paths["REPO"])))
+
     action = "create" if is_new else "update"
     git_info = git_commit_and_optional_push(paths["REPO"], f"wiki: {action} {clean_slug}", staged)
     return {"lobe": lobe, "slug": clean_slug, "created": is_new, **git_info}
@@ -368,7 +464,12 @@ MCP_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "lobe_create",
-        "description": "Create a new git-backed lobe wiki.",
+        "description": (
+            "Create a new git-backed lobe wiki (or clone an existing remote_url). "
+            "Ask the user whether they also want to generate and install the four lobe-named skills "
+            "(<name>-add-raw, <name>-ingest, <name>-ask, <name>-lint) on their client machine "
+            "(pass generate_skills=true)."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -376,8 +477,38 @@ MCP_TOOLS: list[dict[str, Any]] = [
                 "purpose": {"type": "string", "description": "One-line purpose of the lobe."},
                 "remote_url": {"type": "string", "description": "Optional remote Git URL (origin)."},
                 "autopush": {"type": "boolean", "description": "Whether to auto-push commits to origin."},
+                "generate_skills": {
+                    "type": "boolean",
+                    "description": "If true, also return the four rendered <name>-* SKILL.md files to install on the client machine.",
+                },
+                "skill_mode": {
+                    "type": "string",
+                    "enum": ["mcp", "local"],
+                    "description": "Skill template mode when generate_skills=true: 'mcp' (default, calls lobe-server MCP tools) or 'local' (calls local wikictl).",
+                },
             },
             "required": ["name", "purpose"],
+        },
+    },
+    {
+        "name": "lobe_generate_skills",
+        "description": (
+            "Generate the four lobe-named skills (<name>-add-raw, <name>-ingest, <name>-ask, <name>-lint) "
+            "for any existing lobe on lobe-server so the client can install them into local skill directories "
+            "(e.g. ~/.claude/skills/ or ~/.gemini/config/skills/). Defaults to mode='mcp' (remote MCP skills); "
+            "pass mode='local' for local wikictl skills."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "lobe": {"type": "string", "description": "Name of the existing lobe on lobe-server."},
+                "mode": {
+                    "type": "string",
+                    "enum": ["mcp", "local"],
+                    "description": "'mcp' (default, calls lobe-server MCP tools without a local clone) or 'local' (calls local wikictl).",
+                },
+            },
+            "required": ["lobe"],
         },
     },
     {
@@ -471,6 +602,18 @@ MCP_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "lobe_read_raw",
+        "description": "Read a raw source file from the lobe's raw/ folder on lobe-server.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "lobe": {"type": "string"},
+                "filename": {"type": "string", "description": "Filename in raw/ (e.g. 2026-10-30-notes.md)."},
+            },
+            "required": ["lobe", "filename"],
+        },
+    },
+    {
         "name": "lobe_read_page",
         "description": "Read a markdown page from the lobe's wiki/ folder.",
         "inputSchema": {
@@ -481,7 +624,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "lobe_write_page",
-        "description": "Create or update a wiki page, optionally add to index.md, and commit locally (with optional push).",
+        "description": "Create or update a wiki page, optionally add to index.md and append to log.md, and commit locally (with optional push).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -490,6 +633,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
                 "content": {"type": "string"},
                 "section": {"type": "string", "description": "Optional index.md section for new pages."},
                 "description": {"type": "string", "description": "Optional <=25-word index description."},
+                "log_entry": {"type": "string", "description": "Optional markdown block to append to wiki/log.md in the same commit."},
             },
             "required": ["lobe", "slug", "content"],
         },
@@ -506,6 +650,13 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
             purpose=args["purpose"],
             remote_url=args.get("remote_url"),
             autopush=bool(args.get("autopush", False)),
+            generate_skills=bool(args.get("generate_skills", False)),
+            skill_mode=str(args.get("skill_mode", "mcp")),
+        )
+    if name == "lobe_generate_skills":
+        return generate_lobe_skills(
+            lobe=args["lobe"],
+            mode=str(args.get("mode", "mcp")),
         )
     if name == "lobe_configure_remote":
         return configure_remote(
@@ -535,6 +686,8 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
         return run_wiki_tool(args["lobe"], *cmd)
     if name == "lobe_add_raw":
         return add_raw(args["lobe"], args["filename"], args["content"])
+    if name == "lobe_read_raw":
+        return read_raw(args["lobe"], args["filename"])
     if name == "lobe_read_page":
         return read_page(args["lobe"], args["slug"])
     if name == "lobe_write_page":
@@ -544,6 +697,7 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
             content=args["content"],
             section=args.get("section"),
             description=args.get("description"),
+            log_entry=args.get("log_entry"),
         )
     raise ValueError(f"Unknown MCP tool: {name!r}")
 
@@ -564,7 +718,7 @@ def handle_mcp_message(msg: dict[str, Any]) -> dict[str, Any] | None:
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "lobe-server", "version": "0.1.0"},
+                "serverInfo": {"name": "lobe-server", "version": server_version()},
             },
         }
     if method == "ping":
@@ -644,6 +798,8 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
                     purpose=payload["purpose"],
                     remote_url=payload.get("remote_url"),
                     autopush=bool(payload.get("autopush", False)),
+                    generate_skills=bool(payload.get("generate_skills", False)),
+                    skill_mode=str(payload.get("skill_mode", "mcp")),
                 )
 
         parts = [unquote(p) for p in path.strip("/").split("/")]
@@ -652,6 +808,9 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
             lobe = parts[2]
             sub = parts[3]
 
+            if sub == "skills" and method == "GET" and len(parts) == 4:
+                mode = query.get("mode", ["mcp"])[0]
+                return 200, generate_lobe_skills(lobe, mode=mode)
             if sub == "remote" and method == "PUT" and len(parts) == 4:
                 return 200, configure_remote(
                     lobe=lobe,
@@ -682,6 +841,8 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
                 return 200, run_wiki_tool(lobe, "links", parts[4])
             if sub == "raw" and method == "POST" and len(parts) == 4:
                 return 201, add_raw(lobe, payload["filename"], payload["content"])
+            if sub == "raw" and method == "GET" and len(parts) == 5:
+                return 200, read_raw(lobe, parts[4])
             if sub == "pages" and len(parts) == 5:
                 slug = parts[4]
                 if method == "GET":
@@ -693,6 +854,7 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
                         content=payload["content"],
                         section=payload.get("section"),
                         description=payload.get("description"),
+                        log_entry=payload.get("log_entry"),
                     )
 
         return 404, {"error": f"Not found: {method} {path}"}

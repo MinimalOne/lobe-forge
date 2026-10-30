@@ -1,94 +1,168 @@
 # lobe-forge
 
 [![Release](https://img.shields.io/github/v/release/MinimalOne/lobe-forge)](https://github.com/MinimalOne/lobe-forge/releases)
-[![Release workflow](https://github.com/MinimalOne/lobe-forge/actions/workflows/release.yml/badge.svg)](https://github.com/MinimalOne/lobe-forge/actions/workflows/release.yml)
+[![Release workflow](https://img.shields.io/github/v/release/MinimalOne/lobe-forge?label=release)](https://github.com/MinimalOne/lobe-forge/actions/workflows/release.yml)
+[![GHCR workflow](https://github.com/MinimalOne/lobe-forge/actions/workflows/ghcr.yml/badge.svg)](https://github.com/MinimalOne/lobe-forge/actions/workflows/ghcr.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](https://docs.claude.com/en/docs/claude-code/plugins)
 
-A Claude Code plugin that creates **lobes**: git-backed LLM wikis, one per purpose (personal,
-family, career, an idea), each with its own skills named after it. Unlike single-wiki tools, it
-keeps topics apart, adopts wikis you already have, and upgrades without touching your pages.
+`lobe-forge` creates and manages **lobes** — Git-backed LLM wikis where each topic (for example: `personal`, `family`, `career`, or `hack`) gets its own isolated repository and its own four named skills:
+- `/<name>-add-raw` — Save a URL, file (PDF, image, doc), or text note into `raw/`
+- `/<name>-ingest` — Compile a raw source into linked wiki pages, `index.md`, and `log.md`
+- `/<name>-ask` — Search and answer questions from the wiki with citations
+- `/<name>-lint` — Audit frontmatter, broken links, orphans, index drift, and contradictions
 
 ![Demo: create a lobe, add Karpathy's LLM wiki gist, ingest it, ask a question](docs/demo.gif)
 
+---
+
+## Architecture: Two Ways to Run `lobe-forge`
+
+`lobe-forge` supports two operating modes. The generated `<name>-*` skills automatically use the backend that created them:
+
+| Mode | Managed By | Where Lobe Files Live | How `<name>-*` Skills Run |
+| :--- | :--- | :--- | :--- |
+| **1. Local Lobes** | `/lobe-forge` plugin (`scripts/forge.py`) | Local disk (`~/lobes/<name>`) | Skills (`templates/skills/`) run local `wikictl` and local `git` commands. |
+| **2. Remote Lobes** | `lobe-server` MCP server (`server/app.py`) | Remote server (`/data/lobes/<name>`) | Skills (`templates/mcp-skills/`) call `lobe-server` MCP tools over HTTPS or stdio. No local lobe clone is needed. |
+
+```text
+MODE 1: LOCAL LOBES (/lobe-forge plugin)
+────────────────────────────────────────
+  /lobe-forge  ──►  Creates ~/lobes/<name> + symlinks local skills (~/.claude/skills/<name>-*)
+  /<name>-*    ──►  Runs local wikictl & git directly on ~/lobes/<name>
+
+
+MODE 2: REMOTE LOBES (lobe-server MCP)
+──────────────────────────────────────
+  lobe_create / lobe_generate_skills (MCP)
+       ├──►  1. Creates or clones /data/lobes/<name> on lobe-server (auto-commits & optional git push)
+       └──►  2. Generates remote-MCP skills (<name>-add-raw, -ingest, -ask, -lint) on your client machine
+  /<name>-*  ──►  Calls lobe-server MCP tools (lobe_search, lobe_read_page, lobe_write_page, lobe_lint)
 ```
-/lobe-forge  →  name: personal
-             →  /personal-add-raw   save a URL, file (PDF, image, doc) or text into raw/
-                /personal-ingest    turn a source into interlinked wiki pages
-                /personal-ask       answer from the wiki, with citations
-                /personal-lint      health check: format, links, index, stale, contradictions
-```
 
-## Why
+---
 
-Based on Karpathy's [LLM wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
-pattern: instead of re-reading raw documents on every question, Claude compiles them once into
-interlinked wiki pages and answers from those. lobe-forge adds:
+## Mode 1: Local Lobes (`/lobe-forge` Plugin)
 
-- **One wiki per purpose**, each with its own named skills, so `/family-ask` never answers from
-  your work notes.
-- **Token-lean retrieval**: a bundled search tool ranks pages by title, alias, summary and body,
-  so skills read search hits instead of the whole index.
-- **Full history**: every ingest is a git commit.
-- **Adoption** of wikis you already have, without rewriting a page.
+Use Mode 1 when you want your wiki repositories stored on your local computer.
 
-## Quick start
+### Requirements
 
-Requires [Claude Code](https://docs.claude.com/en/docs/claude-code), git and Python 3.10+.
+- [Claude Code](https://docs.claude.com/en/docs/claude-code)
+- Git
+- Python 3.10 or newer
+
+### Quick Start (Local)
+
+1. Install the plugin in Claude Code:
+
+   ```bash
+   claude plugin marketplace add MinimalOne/lobe-forge
+   claude plugin install lobe-forge@lobe-forge
+   ```
+
+2. Run `/lobe-forge` in Claude Code.
+3. Enter the lobe **name**, **purpose**, **local repository path** (`~/lobes/<name>`), and target **Claude installations**.
+4. Restart Claude Code to load the new skills, then use them:
+
+   ```text
+   /personal-add-raw https://example.com/article
+   /personal-ingest
+   /personal-ask what did that article say about X?
+   /personal-lint
+   ```
+
+---
+
+## Mode 2: Remote Lobes (`lobe-server` MCP Server)
+
+Use Mode 2 when you host your lobes on a remote machine (for example, a Raspberry Pi or home server) and want to access them from Claude Code, Antigravity, or Claude Desktop without keeping local wiki clones on your client devices.
+
+### 1. Deploy `lobe-server`
+
+GitHub Actions publishes multi-architecture (`linux/amd64`, `linux/arm64`) Docker images to `ghcr.io/minimalone/lobe-forge` on every semantic release (`<X.Y.Z>`, `v<X.Y.Z>`, `<X.Y>`, `latest`):
 
 ```bash
-claude plugin marketplace add MinimalOne/lobe-forge
-claude plugin install lobe-forge@lobe-forge
+# Pull the latest release or a specific semantic version (for example: 1.9.0)
+docker pull ghcr.io/minimalone/lobe-forge:latest
+
+# Start lobe-server with Docker Compose
+docker compose -f server/docker-compose.yml up -d
 ```
 
-Run `/lobe-forge`. It asks for a **name** (prefixes every skill), a one-line **purpose**, a
-**repo** (new, or an existing clone or GitHub URL) and which **Claude installations** to
-install into. Restart Claude Code, then feed it a source:
+#### Remote Git Token (`LOBE_GIT_TOKEN`) Permissions
 
+If you configure `LOBE_GIT_TOKEN` so `lobe-server` can clone, pull, and push lobe repositories over HTTPS, grant only the minimum repository permissions on the token form. For example, for a **GitHub Fine-Grained Personal Access Token**:
+- **Contents**: `Read and write`
+- **Metadata**: `Read-only` (required, added automatically)
+- **Everything else**: `No access`
+
+See [Git Configuration and Authentication in `docs/usage.md`](docs/usage.md#git-configuration-and-authentication) for Codeberg/Forgejo, GitLab, Bitbucket, and SSH key setups.
+
+### 2. Connect Your AI Clients to `lobe-server`
+
+```bash
+# Claude Code (native HTTP MCP transport)
+claude mcp add --transport http --scope user lobe-server https://lobes.example.com/mcp \
+  --header "Authorization: Bearer <LOBE_API_TOKEN>"
 ```
-/personal-add-raw https://example.com/article
-/personal-ingest
-/personal-ask what did that article say about X?
-```
 
-## Examples
+For Antigravity (`agy` / `agyme` / `agydh`) and Claude Desktop, see [Connecting AI Clients in `docs/usage.md`](docs/usage.md#connecting-ai-clients-to-lobe-server).
 
-### Manage lobes with `/lobe-forge`
+### 3. Create Remote Lobes and Generate Client Skills via MCP
 
-| You want to | Say |
-|---|---|
-| Create a lobe from scratch, in a new repo | `/lobe-forge create a family lobe for kids' school, health and holidays` |
-| Add a lobe to a repo you already have | `/lobe-forge create a lobe in ~/code/my-project` |
-| Find existing `wiki/` or `llmwiki/` folders | `/lobe-forge scan ~/code` (pick none to only look) |
-| Turn existing wikis into lobes | `/lobe-forge adopt the wikis in ~/code` |
-| Set up a lobe you cloned on another machine | `/lobe-forge install the lobe I cloned to ~/lobes/personal` |
-| Get new templates for one lobe, or all | `/lobe-forge upgrade the personal lobe` · `/lobe-forge upgrade my lobes` |
-| Move an adopted lobe into its own repo | `/lobe-forge move the team-notes lobe to ~/lobes/team-notes` |
-| Remove a lobe's skills | `/lobe-forge uninstall the personal lobe` |
-| Remove an adopted lobe and its generated files | `/lobe-forge uninstall the team-notes lobe and delete its home` |
+With `lobe-server` connected as an MCP server, you can create remote lobes and install their `<name>-*` skills on your client machine in two ways:
 
-When a lobe is created, `/lobe-forge` offers to publish it as a **private** GitHub repo, and only
-when the content is yours. Wikis in repos you don't own (e.g. an employer org) are adopted
-**externally**: nothing is written into the repo, and the skills never push. lobe-forge only
-overwrites or deletes files it generated, never wiki pages or sources, and shows a dry run first.
+1. **While creating a lobe (`lobe_create`)**:
+   - Ask your AI assistant: *"Create a new `hack` lobe on lobe-server for homelab notes."*
+   - The assistant asks whether you want to generate and install the four `<name>-*` skills (`hack-add-raw`, `hack-ingest`, `hack-ask`, `hack-lint`) locally.
+   - When confirmed (`generate_skills: true`), `lobe_create` creates `/data/lobes/hack` on the server and returns the four rendered remote-MCP `SKILL.md` files, which the assistant writes into your local skill directories (`~/.claude/skills/`, `~/.gemini/config/skills/`, etc.).
+2. **At any later time for an existing lobe (`lobe_generate_skills`)**:
+   - Ask your AI assistant: *"Generate and install the skills for the `hack` lobe from lobe-server."*
+   - The assistant calls `lobe_generate_skills(lobe="hack", mode="mcp")` and installs `hack-add-raw`, `hack-ingest`, `hack-ask`, and `hack-lint` into your local skill directories.
+   - Those skills call `lobe-server` MCP tools (`lobe_add_raw`, `lobe_read_raw`, `lobe_search`, `lobe_read_page`, `lobe_write_page`, `lobe_lint`) directly.
 
-### Use a lobe (here named `personal`)
+---
 
-| You want to | Say |
-|---|---|
-| Save a web page | `/personal-add-raw https://example.com/article` |
-| Save a file (PDF, image, doc) | `/personal-add-raw ~/Downloads/lease.pdf` |
-| Save a note | `/personal-add-raw dentist says next check-up in March` |
-| Turn a saved source into wiki pages | `/personal-ingest raw/lease.pdf` |
-| Ask, with citations (good answers can be saved as pages) | `/personal-ask when does the lease end?` |
-| Check the wiki: format, links, index, stale pages, contradictions | `/personal-lint` |
+## Common Commands Reference
 
-See [docs/usage.md](docs/usage.md) for the lobe layout, what each task does, the
-underlying `forge.py` commands, and the optional self-hosted REST API / MCP server in `server/`.
+### Manage Local Lobes with `/lobe-forge`
 
-## Contributing
+| Task | Command |
+| :--- | :--- |
+| Create a local lobe | `/lobe-forge create a family lobe for school, health, and holidays` |
+| Scan a folder for `wiki/` or `llmwiki/` | `/lobe-forge scan ~/code` |
+| Adopt existing wikis | `/lobe-forge adopt the wikis in ~/code` |
+| Install a cloned lobe on a new machine | `/lobe-forge install the lobe I cloned to ~/lobes/personal` |
+| Upgrade local lobe templates | `/lobe-forge upgrade the personal lobe` · `/lobe-forge upgrade my lobes` |
+| Remove local lobe skill links | `/lobe-forge uninstall the personal lobe` |
 
-See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
+### Manage Remote Lobes with `lobe-server` MCP
+
+| Task | Prompt / MCP Tool |
+| :--- | :--- |
+| List all lobes on `lobe-server` | `lobe_list` |
+| Create or clone a lobe on `lobe-server` (and optionally install skills) | `lobe_create(name, purpose, remote_url?, autopush?, generate_skills?)` |
+| Generate `<name>-*` skills for an existing lobe on `lobe-server` | `lobe_generate_skills(lobe, mode="mcp" \| "local")` |
+| Configure remote Git URL and auto-push | `lobe_configure_remote(lobe, remote_url, autopush)` |
+| Pull and push changes with `origin` | `lobe_sync(lobe, push=true)` |
+
+### Daily Lobe Skills (Identical Commands in Both Modes)
+
+| Task | Command |
+| :--- | :--- |
+| Save a web page, local file, or note | `/<name>-add-raw https://example.com/article` |
+| Compile a raw source into wiki pages | `/<name>-ingest raw/2026-10-30-notes.md` |
+| Ask a question with citations | `/<name>-ask how is the reverse proxy configured?` |
+| Audit the wiki | `/<name>-lint` |
+
+---
+
+## Documentation
+
+- [Usage & Self-Hosted Server Reference (`docs/usage.md`)](docs/usage.md)
+- [OpenAPI 3.1.0 Specification (`openapi.yaml`)](openapi.yaml)
+- [Contributing Guide (`docs/CONTRIBUTING.md`)](docs/CONTRIBUTING.md)
 
 ## License
 

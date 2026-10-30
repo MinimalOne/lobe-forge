@@ -232,21 +232,38 @@ def test_part2_http_rest_and_mcp_e2e() -> None:
 
             tok = "secret-test-token"
 
-            # 2. Create two isolated lobes via REST API
+            # 2. Create two isolated lobes via REST API (one with generate_skills=True)
             code, h_res = http_req(
-                base_url, "POST", "/api/lobes", {"name": "hack", "purpose": "Homelab tinkering"}, token=tok
+                base_url,
+                "POST",
+                "/api/lobes",
+                {"name": "hack", "purpose": "Homelab tinkering", "generate_skills": True, "skill_mode": "mcp"},
+                token=tok,
             )
             assert code == 201 and h_res["name"] == "hack" and h_res["pushed"] is False
+            assert h_res["skill_mode"] == "mcp"
+            assert h_res["skill_names"] == ["hack-add-raw", "hack-ingest", "hack-ask", "hack-lint"]
+            assert "lobe_add_raw" in h_res["skills"]["hack-add-raw/SKILL.md"]
+            assert "lobe_search" in h_res["skills"]["hack-ask/SKILL.md"]
+            assert "{{" not in h_res["skills"]["hack-ingest/SKILL.md"]
 
             code, p_res = http_req(
                 base_url, "POST", "/api/lobes", {"name": "personal", "purpose": "Personal notes"}, token=tok
             )
-            assert code == 201 and p_res["name"] == "personal"
+            assert code == 201 and p_res["name"] == "personal" and "skills" not in p_res
+
+            # Generate skills later for an existing lobe via GET /api/lobes/{lobe}/skills
+            code, sk_mcp = http_req(base_url, "GET", "/api/lobes/personal/skills?mode=mcp", token=tok)
+            assert code == 200 and sk_mcp["mode"] == "mcp"
+            assert "lobe_write_page" in sk_mcp["skills"]["personal-ingest/SKILL.md"]
+            code, sk_loc = http_req(base_url, "GET", "/api/lobes/personal/skills?mode=local", token=tok)
+            assert code == 200 and sk_loc["mode"] == "local"
+            assert "wikictl" in sk_loc["skills"]["personal-ingest/SKILL.md"]
 
             code, list_res = http_req(base_url, "GET", "/api/lobes", token=tok)
             assert code == 200 and [x["name"] for x in list_res["lobes"]] == ["hack", "personal"]
 
-            # 3. Add raw source, check pending & sections, write page, read page
+            # 3. Add raw source, read raw source, check pending & sections, write page (with log_entry), read page
             code, raw_res = http_req(
                 base_url,
                 "POST",
@@ -255,6 +272,9 @@ def test_part2_http_rest_and_mcp_e2e() -> None:
                 token=tok,
             )
             assert code == 201 and raw_res["committed"] is True
+
+            code, raw_rd = http_req(base_url, "GET", "/api/lobes/hack/raw/2026-10-30-pi5-notes.md", token=tok)
+            assert code == 200 and raw_rd["content"] == "# Raw notes\n"
 
             code, pend = http_req(base_url, "GET", "/api/lobes/hack/pending", token=tok)
             assert code == 200 and "2026-10-30-pi5-notes.md" in pend["stdout"]
@@ -266,10 +286,16 @@ def test_part2_http_rest_and_mcp_e2e() -> None:
                 base_url,
                 "PUT",
                 "/api/lobes/hack/pages/pi5-setup",
-                {"content": SAMPLE_PAGE, "section": "General", "description": "Pi 5 setup guide."},
+                {
+                    "content": SAMPLE_PAGE,
+                    "section": "General",
+                    "description": "Pi 5 setup guide.",
+                    "log_entry": "## 2026-10-30 — Ingest: 2026-10-30-pi5-notes.md\n\n- Created: `wiki/pi5-setup.md`",
+                },
                 token=tok,
             )
             assert code == 200 and wr["created"] is True and wr["committed"] is True
+            assert "Ingest: 2026-10-30-pi5-notes.md" in (lobes_dir / "hack" / "wiki" / "log.md").read_text(encoding="utf-8")
 
             code, rd = http_req(base_url, "GET", "/api/lobes/hack/pages/pi5-setup", token=tok)
             assert code == 200 and rd["slug"] == "pi5-setup" and "sudo rpi-eeprom-config" in rd["content"]
@@ -384,7 +410,46 @@ def test_part2_http_rest_and_mcp_e2e() -> None:
                 base_url, "POST", "/mcp", {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, token=tok
             )
             tool_names = {t["name"] for t in tools_resp["result"]["tools"]}
-            assert code == 200 and {"lobe_list", "lobe_sync", "lobe_search", "lobe_write_page", "lobe_lint"} <= tool_names
+            assert code == 200 and {
+                "lobe_list",
+                "lobe_create",
+                "lobe_generate_skills",
+                "lobe_sync",
+                "lobe_search",
+                "lobe_read_raw",
+                "lobe_write_page",
+                "lobe_lint",
+            } <= tool_names
+
+            code, sk_call = http_req(
+                base_url,
+                "POST",
+                "/mcp",
+                {
+                    "jsonrpc": "2.0",
+                    "id": 25,
+                    "method": "tools/call",
+                    "params": {"name": "lobe_generate_skills", "arguments": {"lobe": "hack", "mode": "mcp"}},
+                },
+                token=tok,
+            )
+            assert code == 200 and sk_call["result"]["isError"] is False
+            assert "hack-ask/SKILL.md" in sk_call["result"]["structuredContent"]["skills"]
+
+            code, rraw_call = http_req(
+                base_url,
+                "POST",
+                "/mcp",
+                {
+                    "jsonrpc": "2.0",
+                    "id": 26,
+                    "method": "tools/call",
+                    "params": {"name": "lobe_read_raw", "arguments": {"lobe": "hack", "filename": "2026-10-30-pi5-notes.md"}},
+                },
+                token=tok,
+            )
+            assert code == 200 and rraw_call["result"]["isError"] is False
+            assert rraw_call["result"]["structuredContent"]["content"] == "# Raw notes\n"
 
             code, call_resp = http_req(
                 base_url,
@@ -454,6 +519,7 @@ def test_part3_container_isolation_and_compose() -> None:
     for route in [
         "/health:",
         "/api/lobes:",
+        "/api/lobes/{lobe}/skills:",
         "/api/lobes/{lobe}/remote:",
         "/api/lobes/{lobe}/sync:",
         "/api/lobes/{lobe}/search:",
@@ -462,21 +528,31 @@ def test_part3_container_isolation_and_compose() -> None:
         "/api/lobes/{lobe}/lint:",
         "/api/lobes/{lobe}/links/{page}:",
         "/api/lobes/{lobe}/raw:",
+        "/api/lobes/{lobe}/raw/{filename}:",
         "/api/lobes/{lobe}/pages/{slug}:",
         "/mcp:",
     ]:
         assert route in openapi, f"Missing route {route} in openapi.yaml"
 
+    assert "COPY .claude-plugin/plugin.json /app/.claude-plugin/plugin.json" in dockerfile
     assert "COPY scripts/ /app/scripts/" in dockerfile
     assert "COPY templates/ /app/templates/" in dockerfile
     assert "COPY server/app.py /app/server/app.py" in dockerfile
     assert 'profiles: ["webui"]' in compose
     assert 'profiles: ["forgejo"]' in compose
 
+    expected_ver = json.loads((repo_root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
+    assert app.server_version() == expected_ver
+
     # Simulate exact Dockerfile layout in an isolated temp root (/app) and run MCP stdio E2E
     with tempfile.TemporaryDirectory() as tmp:
         app_root = Path(tmp) / "app"
         lobes_dir = Path(tmp) / "data" / "lobes"
+        (app_root / ".claude-plugin").mkdir(parents=True)
+        shutil.copy2(
+            repo_root / ".claude-plugin" / "plugin.json",
+            app_root / ".claude-plugin" / "plugin.json",
+        )
         shutil.copytree(repo_root / "scripts", app_root / "scripts")
         shutil.copytree(repo_root / "templates", app_root / "templates")
         (app_root / "server").mkdir(parents=True)

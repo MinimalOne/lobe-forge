@@ -20,7 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PLUGIN = ROOT / ".claude-plugin" / "plugin.json"
 SKILL = ROOT / "skills" / "lobe-forge" / "SKILL.md"
-SHIPPED = ["skills", "scripts", "templates"]  # what an installed plugin runs
+OPENAPI = ROOT / "openapi.yaml"
+SHIPPED = ["skills", "scripts", "templates", "server", "openapi.yaml", "docs", "README.md"]  # what an installed plugin or server runs
 
 
 def git(*args: str) -> str:
@@ -73,6 +74,8 @@ def main() -> None:
 
     PLUGIN.write_text(re.sub(r'("version":\s*")[^"]+(")', rf"\g<1>{version}\2", PLUGIN.read_text(), count=1))
     SKILL.write_text(re.sub(r"^version: .*$", f"version: {version}", SKILL.read_text(), count=1, flags=re.M))
+    if OPENAPI.exists():
+        OPENAPI.write_text(re.sub(r"^(\s*version:\s*).*$", rf"\g<1>{version}", OPENAPI.read_text(), count=1, flags=re.M))
     notes = [f"- {s}" for s, _ in commits_since(last) if not s.startswith("chore: release v")]
     Path(args.notes).write_text("\n".join(notes) + "\n")
     print(f"version={version}")

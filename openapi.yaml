@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: lobe-server API
-  version: 0.1.0
+  version: 1.9.0
   description: |
     Self-hosted REST API and Model Context Protocol (MCP) server for managing
     git-backed `lobe-forge` LLM wikis with local-first Git commits and optional remote push.
@@ -79,6 +79,35 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
+
+  /api/lobes/{lobe}/skills:
+    parameters:
+      - $ref: "#/components/parameters/LobeName"
+    get:
+      operationId: generateLobeSkills
+      summary: Generate the four lobe-named skills (<name>-add-raw, <name>-ingest, <name>-ask, <name>-lint)
+      parameters:
+        - name: mode
+          in: query
+          required: false
+          description: Skill template mode (`mcp` for remote MCP skills, `local` for local wikictl skills)
+          schema:
+            type: string
+            enum: [mcp, local]
+            default: mcp
+      responses:
+        "200":
+          description: Rendered SKILL.md files and client installation instructions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenerateSkillsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /api/lobes/{lobe}/remote:
     parameters:
@@ -287,6 +316,30 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/lobes/{lobe}/raw/{filename}:
+    parameters:
+      - $ref: "#/components/parameters/LobeName"
+      - name: filename
+        in: path
+        required: true
+        description: Filename inside the lobe's `raw/` directory
+        schema:
+          type: string
+    get:
+      operationId: readRawSource
+      summary: Read a raw source file from the lobe's `raw/` folder
+      responses:
+        "200":
+          description: Raw source file content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadRawResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/lobes/{lobe}/pages/{slug}:
     parameters:
       - $ref: "#/components/parameters/LobeName"
@@ -474,6 +527,38 @@ components:
           type: boolean
           default: false
           description: Whether to automatically push local commits to `origin`
+        generate_skills:
+          type: boolean
+          default: false
+          description: Whether to also return the four rendered `<name>-*` SKILL.md files in the response
+        skill_mode:
+          type: string
+          enum: [mcp, local]
+          default: mcp
+          description: Skill template mode when `generate_skills` is true (`mcp` or `local`)
+
+    GenerateSkillsResponse:
+      type: object
+      required: [lobe, purpose, mode, skill_names, skills, install_instructions]
+      properties:
+        lobe:
+          type: string
+        purpose:
+          type: string
+        mode:
+          type: string
+          enum: [mcp, local]
+        skill_names:
+          type: array
+          items:
+            type: string
+        skills:
+          type: object
+          additionalProperties:
+            type: string
+          description: Map of `<skill-name>/SKILL.md` to rendered Markdown content
+        install_instructions:
+          type: string
 
     CreateLobeResponse:
       allOf:
@@ -574,6 +659,20 @@ components:
               example: raw/2026-10-30-notes.md
         - $ref: "#/components/schemas/GitCommitStatus"
 
+    ReadRawResponse:
+      type: object
+      required: [lobe, filename, path, content]
+      properties:
+        lobe:
+          type: string
+        filename:
+          type: string
+        path:
+          type: string
+          example: raw/2026-10-30-notes.md
+        content:
+          type: string
+
     ReadPageResponse:
       type: object
       required: [lobe, slug, path, content]
@@ -601,6 +700,9 @@ components:
         description:
           type: string
           description: Optional <=25-word description for `wiki/index.md`
+        log_entry:
+          type: string
+          description: Optional markdown block to append to `wiki/log.md` in the same commit
 
     WritePageResponse:
       allOf:

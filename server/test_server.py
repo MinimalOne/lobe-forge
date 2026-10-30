@@ -153,10 +153,22 @@ def test_part1_core_and_git_scenarios() -> None:
         except ValueError as exc:
             assert "Cannot access remote repository" in str(exc)
 
-        # Verify LOBE_GIT_TOKEN injects HTTP Basic auth header for git operations
+        # Verify LOBE_GIT_TOKEN injects provider-appropriate HTTP Basic auth header for git operations
+        import base64
+
+        def decoded_header(remote_url: str | None = None) -> str:
+            args, _ = app.git_auth_args_and_env(remote_url)
+            b64 = [a.split("Basic ", 1)[1] for a in args if "Basic " in a][0]
+            return base64.b64decode(b64).decode("utf-8")
+
         os.environ["LOBE_GIT_TOKEN"] = "ghp_testtoken123"
-        auth_args, _ = app.git_auth_args_and_env()
-        assert any("http.extraHeader=Authorization: Basic " in a for a in auth_args)
+        assert decoded_header("https://github.com/u/r.git") == "x-access-token:ghp_testtoken123"
+        assert decoded_header("https://codeberg.org/u/r.git") == "x-access-token:ghp_testtoken123"
+        assert decoded_header("https://gitlab.com/u/r.git") == "oauth2:ghp_testtoken123"
+        assert decoded_header("https://bitbucket.org/u/r.git") == "x-token-auth:ghp_testtoken123"
+
+        os.environ["LOBE_GIT_TOKEN"] = "myuser:myapppass"
+        assert decoded_header("https://bitbucket.org/u/r.git") == "myuser:myapppass"
         os.environ.pop("LOBE_GIT_TOKEN", None)
 
         # 8. Clone existing non-empty remote in create_lobe & explicit sync_lobe across two installations

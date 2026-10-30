@@ -39,7 +39,7 @@ def resolve_lobe(lobe: str) -> Path:
     return lobe_dir
 
 
-def git_auth_args_and_env() -> tuple[list[str], dict[str, str]]:
+def git_auth_args_and_env(remote_url: str | None = None) -> tuple[list[str], dict[str, str]]:
     """Build non-interactive Git args and env, injecting LOBE_GIT_TOKEN for HTTP(S) remotes if set."""
     env = {
         **os.environ,
@@ -49,13 +49,27 @@ def git_auth_args_and_env() -> tuple[list[str], dict[str, str]]:
     extra_args: list[str] = []
     token = os.environ.get("LOBE_GIT_TOKEN", "").strip()
     if token:
-        basic = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
+        if ":" in token:
+            creds = token
+        elif token.startswith("glpat-") or (remote_url and "gitlab" in remote_url.lower()):
+            creds = f"oauth2:{token}"
+        elif remote_url and "bitbucket" in remote_url.lower():
+            creds = f"x-token-auth:{token}"
+        else:
+            creds = f"x-access-token:{token}"
+        basic = base64.b64encode(creds.encode("utf-8")).decode("ascii")
         extra_args.extend(["-c", f"http.extraHeader=Authorization: Basic {basic}"])
     return extra_args, env
 
 
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    auth_args, env = git_auth_args_and_env()
+    r_url = subprocess.run(
+        ["git", "-C", str(repo), "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip() or None
+    auth_args, env = git_auth_args_and_env(r_url)
     return subprocess.run(
         [
             "git",
@@ -80,7 +94,7 @@ def verify_remote_access(remote_url: str) -> bool:
     Verify read/access to `remote_url` via `git ls-remote --heads`.
     Raises ValueError if unreachable or unauthorized. Returns True if remote already has commits/branches.
     """
-    auth_args, env = git_auth_args_and_env()
+    auth_args, env = git_auth_args_and_env(remote_url)
     r = subprocess.run(
         ["git", *auth_args, "ls-remote", "--heads", remote_url],
         capture_output=True,
@@ -192,7 +206,7 @@ def create_lobe(name: str, purpose: str, remote_url: str | None = None, autopush
     if remote_url:
         remote_has_commits = verify_remote_access(remote_url)
         if remote_has_commits and not repo_dir.exists():
-            auth_args, env = git_auth_args_and_env()
+            auth_args, env = git_auth_args_and_env(remote_url)
             cr = subprocess.run(
                 ["git", *auth_args, "clone", "-q", remote_url, str(repo_dir)],
                 capture_output=True,

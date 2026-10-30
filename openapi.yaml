@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: lobe-server API
-  version: 0.1.0
+  version: 1.9.0
   description: |
     Self-hosted REST API and Model Context Protocol (MCP) server for managing
     git-backed `lobe-forge` LLM wikis with local-first Git commits and optional remote push.

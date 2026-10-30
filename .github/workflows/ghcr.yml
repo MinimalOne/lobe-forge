@@ -1,15 +1,10 @@
 name: ghcr
 
 on:
-  push:
+  workflow_run:
+    workflows: ["release"]
+    types: [completed]
     branches: [main]
-    tags: ["v*"]
-    paths:
-      - "server/**"
-      - "scripts/**"
-      - "templates/**"
-      - "openapi.yaml"
-      - ".github/workflows/ghcr.yml"
   pull_request:
     branches: [main]
     paths:
@@ -26,15 +21,26 @@ permissions:
 
 jobs:
   build-and-push:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && 'main' || github.ref }}
 
       - name: Run E2E tests
         run: |
           python3 test_forge.py
           python3 server/test_server.py
+
+      - name: Read semantic release version
+        id: ver
+        run: |
+          V=$(python3 -c 'import json; print(json.load(open(".claude-plugin/plugin.json"))["version"])')
+          MAJOR_MINOR=$(echo "$V" | cut -d. -f1,2)
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "major_minor=$MAJOR_MINOR" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -56,9 +62,10 @@ jobs:
         with:
           images: ghcr.io/minimalone/lobe-forge
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
+            type=raw,value=${{ steps.ver.outputs.version }},enable=${{ github.event_name != 'pull_request' }}
+            type=raw,value=v${{ steps.ver.outputs.version }},enable=${{ github.event_name != 'pull_request' }}
+            type=raw,value=${{ steps.ver.outputs.major_minor }},enable=${{ github.event_name != 'pull_request' }}
             type=sha
 
       - name: Build and push multi-arch Docker image
@@ -68,6 +75,8 @@ jobs:
           file: server/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

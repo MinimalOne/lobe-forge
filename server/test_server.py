@@ -467,16 +467,25 @@ def test_part3_container_isolation_and_compose() -> None:
     ]:
         assert route in openapi, f"Missing route {route} in openapi.yaml"
 
+    assert "COPY .claude-plugin/plugin.json /app/.claude-plugin/plugin.json" in dockerfile
     assert "COPY scripts/ /app/scripts/" in dockerfile
     assert "COPY templates/ /app/templates/" in dockerfile
     assert "COPY server/app.py /app/server/app.py" in dockerfile
     assert 'profiles: ["webui"]' in compose
     assert 'profiles: ["forgejo"]' in compose
 
+    expected_ver = json.loads((repo_root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
+    assert app.server_version() == expected_ver
+
     # Simulate exact Dockerfile layout in an isolated temp root (/app) and run MCP stdio E2E
     with tempfile.TemporaryDirectory() as tmp:
         app_root = Path(tmp) / "app"
         lobes_dir = Path(tmp) / "data" / "lobes"
+        (app_root / ".claude-plugin").mkdir(parents=True)
+        shutil.copy2(
+            repo_root / ".claude-plugin" / "plugin.json",
+            app_root / ".claude-plugin" / "plugin.json",
+        )
         shutil.copytree(repo_root / "scripts", app_root / "scripts")
         shutil.copytree(repo_root / "templates", app_root / "templates")
         (app_root / "server").mkdir(parents=True)

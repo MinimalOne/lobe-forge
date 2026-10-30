@@ -21,7 +21,17 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 FORGE_SCRIPT = ROOT / "scripts" / "forge.py"
+PLUGIN_JSON = ROOT / ".claude-plugin" / "plugin.json"
 NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+
+def server_version() -> str:
+    if PLUGIN_JSON.exists():
+        try:
+            return json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))["version"]
+        except Exception:
+            pass
+    return os.environ.get("LOBE_SERVER_VERSION", "1.9.0")
 
 
 def lobes_root() -> Path:
@@ -564,7 +574,7 @@ def handle_mcp_message(msg: dict[str, Any]) -> dict[str, Any] | None:
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "lobe-server", "version": "0.1.0"},
+                "serverInfo": {"name": "lobe-server", "version": server_version()},
             },
         }
     if method == "ping":

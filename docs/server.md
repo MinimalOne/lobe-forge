@@ -1,6 +1,6 @@
 # Run lobe-server
 
-`lobe-server` hosts all your lobes on one machine (a home server, Raspberry Pi, or VPS) and serves them over MCP and a REST API. Assistants connect to it instead of keeping wiki files locally. It uses only the Python standard library.
+`lobe-server` hosts all your lobes on one machine you control (a home server, Raspberry Pi, or VPS) and serves them over MCP and a REST API. Every AI tool you connect, from Claude Code and Codex on your laptop to Claude on your phone and a personal agent such as Hermes Agent, then shares the same second brain, with no wiki files on the devices themselves. It uses only the Python standard library.
 
 Images for `linux/amd64` and `linux/arm64` are published to `ghcr.io/minimalone/lobe-forge` on every release, tagged `<X.Y.Z>`, `v<X.Y.Z>`, `<X.Y>`, and `latest`.
 

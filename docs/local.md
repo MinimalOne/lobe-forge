@@ -1,6 +1,12 @@
 # Local lobes
 
-Use the `/lobe-forge` Claude Code plugin to keep lobes on your own computer. You normally just talk to it: `/lobe-forge` asks for what it needs and runs `scripts/forge.py` for you. The `forge.py` commands below are for automation and troubleshooting. The script is in this repository's `scripts/` folder, or in `~/.claude/plugins/cache/lobe-forge/lobe-forge/<version>/scripts/`.
+Local lobes live on your own computer, in `~/lobes/<name>`, and never leave it unless you push them to a Git remote.
+
+- **Create and manage** them with the `/lobe-forge` Claude Code plugin (this page).
+- **Use** them from Claude Code through the plugin's skills, or from any other MCP tool (Codex, Gemini CLI, Antigravity, Cursor, Hermes Agent, and others) by running lobe-server over stdio: see [Local lobes without a server](clients.md#local-lobes-without-a-server).
+- **Reach them from other devices or your phone** by moving them to a [self-hosted lobe-server](server.md).
+
+You normally just talk to the plugin: `/lobe-forge` asks for what it needs and runs `scripts/forge.py` for you. The `forge.py` commands below are for automation and troubleshooting. The script is in this repository's `scripts/` folder, or in `~/.claude/plugins/cache/lobe-forge/lobe-forge/<version>/scripts/`.
 
 ## Common tasks
 
@@ -17,7 +23,7 @@ Use the `/lobe-forge` Claude Code plugin to keep lobes on your own computer. You
 
 1. Run `/lobe-forge`.
 2. Enter the lobe **name** (for example `personal`), its **purpose**, the **repository path** (default `~/lobes/<name>`), and which **Claude installations** get the skills.
-3. Restart Claude Code. The skills `/<name>-add-raw`, `/<name>-ingest`, `/<name>-ask`, and `/<name>-lint` are now available.
+3. Restart Claude Code. You can now ask in plain words (*"save this to homelab"*, *"ask homelab how backups work"*), or use the lobe's slash commands `/<name>-add-raw`, `/<name>-ingest`, `/<name>-ask`, and `/<name>-lint`.
 
 Each skill is a symbolic link from your Claude configuration directory (for example `~/.claude/skills/personal-ask`) to the lobe repository. Every ingest creates a Git commit.
 

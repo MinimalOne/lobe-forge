@@ -1,5 +1,7 @@
 # How it works
 
+lobe-forge gives your AI tools a shared, long-term memory: a second brain made of wikis that the AI writes and you own.
+
 ## A lobe is a Git repository
 
 The idea comes from Karpathy's "LLM wiki" pattern. You add sources, and the assistant compiles them into a wiki that it keeps consistent: summaries, links between pages, an index, and a log. You read and steer it; the assistant does the writing and bookkeeping.
@@ -15,28 +17,29 @@ skills/         <name>-add-raw, <name>-ingest, <name>-ask, <name>-lint
 
 Pages are plain Markdown with YAML frontmatter (title, summary, aliases, atoms, sources, last updated) and `[[wiki-links]]`. Atoms are one-line facts, commands, fixes, and decisions, so search can answer from them directly. Search ranks a match in a page's name, title, aliases, atoms, or summary above a match in the body text, and slightly prefers recently updated pages. Every change is a Git commit, so you can review, revert, or push it like any other repository.
 
-## Two ways to run it
+## Local and remote lobes
 
-The four `/<name>-*` commands work the same way in both. What differs is where the files live and what the skills call.
+The lobe format is the same in both. What differs is where the files live and how AI tools reach them.
 
-| | On your computer | On a server |
+| | Local lobes | Remote lobes (self-hosted) |
 | :--- | :--- | :--- |
-| Managed by | `/lobe-forge` Claude Code plugin (`scripts/forge.py`) | `lobe-server` (`server/app.py`) |
-| Lobe files | `~/lobes/<name>` | `/data/lobes/<name>` on the server |
-| Skills call | local `wikictl` and `git` | `lobe_*` MCP tools over HTTPS or stdio |
-| Skill templates | `templates/skills/` | `templates/mcp-skills/` |
-| Works with | Claude Code | any MCP client |
+| Lobe files | `~/lobes/<name>` on your computer | `/data/lobes/<name>` on your server |
+| Created by | `/lobe-forge` Claude Code plugin (`scripts/forge.py`) | `lobe_create` on `lobe-server` (`server/app.py`) |
+| Claude Code skills call | local `wikictl` and `git` (`templates/skills/`) | `lobe_*` MCP tools (`templates/mcp-skills/`) |
+| Other AI tools connect | `server/app.py --stdio` on the same computer | `https://<server>/mcp` |
 
 ```text
-ON YOUR COMPUTER
-  /lobe-forge  ──►  creates ~/lobes/<name> and links its skills into ~/.claude/skills/
-  /<name>-*    ──►  runs wikictl and git on ~/lobes/<name>
+LOCAL
+  /lobe-forge          ──►  creates ~/lobes/<name>, links its skills into ~/.claude/skills/
+  Claude Code skills   ──►  run wikictl and git on ~/lobes/<name>
+  other MCP tools      ──►  start server/app.py --stdio with LOBES_DIR=~/lobes
 
-ON A SERVER
-  lobe_create / lobe_generate_skills  ──►  creates or clones /data/lobes/<name> on lobe-server
-                                       └─►  returns the four <name>-* skills for your assistant
-  /<name>-*    ──►  calls lobe_search, lobe_read_page, lobe_write_page, lobe_lint, ...
+REMOTE
+  any MCP tool  ──►  https://<server>/mcp  ──►  lobe-server  ──►  /data/lobes/<name>
+  lobe_create / lobe_generate_skills  ──►  can also return Claude Code skills that call lobe-server
 ```
+
+Every way in reaches the same `lobe_*` operations (search, read, write, lint), so a lobe written by one tool can be read by any other.
 
 ## Git: commit always, push optionally
 

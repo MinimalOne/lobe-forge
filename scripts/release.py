@@ -21,7 +21,8 @@ ROOT = Path(__file__).resolve().parent.parent
 PLUGIN = ROOT / ".claude-plugin" / "plugin.json"
 SKILL = ROOT / "skills" / "lobe-forge" / "SKILL.md"
 OPENAPI = ROOT / "openapi.yaml"
-SHIPPED = ["skills", "scripts", "templates", "server", "openapi.yaml", "docs", "README.md"]  # what an installed plugin or server runs
+# What an installed plugin or server runs. docs/ and README.md are left out: changing them alone releases nothing.
+SHIPPED = ["skills", "scripts", "templates", "server", "openapi.yaml"]
 
 
 def git(*args: str) -> str:

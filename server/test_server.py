@@ -616,6 +616,8 @@ def test_part2_http_rest_and_mcp_e2e() -> None:
             stdio_input = "\n".join([
                 json.dumps({"jsonrpc": "2.0", "id": 10, "method": "initialize"}),
                 json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+                "{not json",  # bad lines get an error reply and the session goes on
+                "[1, 2]",
                 json.dumps({
                     "jsonrpc": "2.0",
                     "id": 11,
@@ -632,9 +634,10 @@ def test_part2_http_rest_and_mcp_e2e() -> None:
                 check=True,
             )
             lines = [json.loads(line) for line in proc.stdout.strip().splitlines()]
-            assert len(lines) == 2
+            assert len(lines) == 4, lines
             assert lines[0]["id"] == 10 and lines[0]["result"]["serverInfo"]["name"] == "lobe-server"
-            assert lines[1]["id"] == 11 and len(lines[1]["result"]["structuredContent"]["lobes"]) == 3
+            assert [l["error"]["code"] for l in lines[1:3]] == [-32700, -32600]
+            assert lines[3]["id"] == 11 and len(lines[3]["result"]["structuredContent"]["lobes"]) == 3
         finally:
             srv.shutdown()
             srv.server_close()

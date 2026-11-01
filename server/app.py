@@ -1186,8 +1186,10 @@ def run_stdio() -> None:
         line = line.strip()
         if not line:
             continue
-        msg = json.loads(line)
-        resp = handle_mcp_message(msg)
+        try:
+            resp = handle_mcp_message(json.loads(line))
+        except ValueError:  # one bad line must not end the session for every later request
+            resp = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error: invalid JSON"}}
         if resp is not None:
             sys.stdout.write(json.dumps(resp) + "\n")
             sys.stdout.flush()

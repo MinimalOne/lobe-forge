@@ -61,7 +61,7 @@ The assistant calls `lobe_create`. lobe-server creates (or clones) `/data/lobes/
 
 ## 3. Push to a Git remote (optional)
 
-Every change is committed in the lobe's local Git repository on the server. Pushing is optional: lobe-server pushes when the lobe has an `origin` remote and auto-push is on (`LOBE_GIT_PUSH=1`, or `autopush: true` per lobe).
+Every change is committed in the lobe's local Git repository on the server. Pushing is optional: lobe-server pushes when the lobe has an `origin` remote and auto-push is on. A lobe's own `autopush` setting (`true` or `false`) wins; a lobe without one follows `LOBE_GIT_PUSH`.
 
 For HTTPS remotes, set `LOBE_GIT_TOKEN`. lobe-server sends it as an HTTP Basic header and never writes it to `.git/config`. It sends the token only to one host, `LOBE_GIT_TOKEN_HOST` (default `github.com`), so a remote URL on any other host cannot receive it. For another Git host, set `LOBE_GIT_TOKEN_HOST` too, for example `LOBE_GIT_TOKEN_HOST=codeberg.org`, or `git.example.com:8443` for a server on a non-standard port. The username part is picked from the remote host:
 

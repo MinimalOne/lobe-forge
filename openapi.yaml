@@ -576,8 +576,7 @@ components:
           description: Optional remote Git repository URL (`origin`)
         autopush:
           type: boolean
-          default: false
-          description: Whether to automatically push local commits to `origin`
+          description: Automatically push local commits to `origin`. Omit to follow the server default (`LOBE_GIT_PUSH`); a value set here overrides it for this lobe.
         generate_skills:
           type: boolean
           default: false

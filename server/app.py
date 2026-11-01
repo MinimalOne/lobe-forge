@@ -176,11 +176,19 @@ def has_remote(repo: Path, remote: str = "origin") -> str | None:
     return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
 
 
+def autopush_enabled(repo: Path) -> bool:
+    """The lobe's own `lobe.autopush` when set (true or false); otherwise the LOBE_GIT_PUSH default."""
+    cfg = git(repo, "config", "--get", "lobe.autopush", check=False).stdout.strip().lower()
+    if cfg in ("true", "false"):
+        return cfg == "true"
+    return os.environ.get("LOBE_GIT_PUSH", "").lower() in ("1", "true", "yes")
+
+
 def git_commit_and_optional_push(repo: Path, message: str, paths: list[str] | None = None) -> dict[str, Any]:
     """
     Commit changes locally in `repo` (mandatory) and push to `origin` only if:
       1. A remote `origin` URL is configured on the repo, AND
-      2. Push is enabled (`LOBE_GIT_PUSH` env var is "1"/"true" or `git config lobe.autopush` is "true").
+      2. Push is enabled for the lobe (see autopush_enabled).
     """
     if paths:
         git(repo, "add", "--", *paths)
@@ -199,9 +207,7 @@ def git_commit_and_optional_push(repo: Path, message: str, paths: list[str] | No
         commit_hash = head.stdout.strip() if head.returncode == 0 else None
 
     remote_url = has_remote(repo)
-    env_push = os.environ.get("LOBE_GIT_PUSH", "").lower() in ("1", "true", "yes")
-    cfg_push = git(repo, "config", "--get", "lobe.autopush", check=False).stdout.strip().lower() == "true"
-    should_push = bool(remote_url and (env_push or cfg_push))
+    should_push = bool(remote_url and autopush_enabled(repo))
 
     pushed = False
     push_error = None
@@ -237,13 +243,13 @@ def list_lobes() -> list[dict[str, Any]]:
                 if line.startswith("**Purpose**:"):
                     purpose = line.split("**Purpose**:", 1)[1].strip()
                     break
-        autopush = git(repo, "config", "--get", "lobe.autopush", check=False).stdout.strip().lower() == "true"
+        remote = has_remote(repo)
         items.append({
             "name": d.name,
             "purpose": purpose,
             "repo": str(repo),
-            "remote": has_remote(repo),
-            "autopush": autopush,
+            "remote": remote,
+            "autopush": bool(remote and autopush_enabled(repo)),
         })
     return items
 
@@ -297,7 +303,7 @@ def create_lobe(
     name: str,
     purpose: str,
     remote_url: str | None = None,
-    autopush: bool = False,
+    autopush: bool | None = None,
     generate_skills: bool = False,
     skill_mode: str = "mcp",
 ) -> dict[str, Any]:
@@ -348,9 +354,10 @@ def create_lobe(
 def configure_remote(
     lobe: str,
     remote_url: str | None,
-    autopush: bool = True,
+    autopush: bool | None = True,
     verify: bool = True,
 ) -> dict[str, Any]:
+    """autopush None leaves lobe.autopush unset, so the LOBE_GIT_PUSH default decides."""
     repo = l_paths(lobe)["REPO"]
     if remote_url and verify:
         verify_remote_access(remote_url)
@@ -363,8 +370,12 @@ def configure_remote(
     elif existing:
         git(repo, "remote", "remove", "origin")
 
-    git(repo, "config", "lobe.autopush", "true" if (remote_url and autopush) else "false")
-    return {"lobe": lobe, "remote": has_remote(repo), "autopush": bool(remote_url and autopush)}
+    if autopush is None:
+        git(repo, "config", "--unset", "lobe.autopush", check=False)  # exit 5 when already unset
+    else:
+        git(repo, "config", "lobe.autopush", "true" if (remote_url and autopush) else "false")
+    remote = has_remote(repo)
+    return {"lobe": lobe, "remote": remote, "autopush": bool(remote and autopush_enabled(repo))}
 
 
 @serialized
@@ -647,7 +658,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
                 "name": {"type": "string", "description": "Lowercase hyphenated lobe name (e.g. hack, personal)."},
                 "purpose": {"type": "string", "description": "One-line purpose of the lobe."},
                 "remote_url": {"type": "string", "description": "Optional remote Git URL (origin)."},
-                "autopush": {"type": "boolean", "description": "Whether to auto-push commits to origin."},
+                "autopush": {"type": "boolean", "description": "Auto-push commits to origin. Omit to follow the server default (LOBE_GIT_PUSH)."},
                 "generate_skills": {
                     "type": "boolean",
                     "description": "If true, also return the four rendered <name>-* SKILL.md files to install on the client machine.",
@@ -864,7 +875,7 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
             name=args["name"],
             purpose=args["purpose"],
             remote_url=args.get("remote_url"),
-            autopush=bool(args.get("autopush", False)),
+            autopush=None if args.get("autopush") is None else bool(args["autopush"]),
             generate_skills=bool(args.get("generate_skills", False)),
             skill_mode=str(args.get("skill_mode", "mcp")),
         )
@@ -1084,7 +1095,7 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
                     name=payload["name"],
                     purpose=payload["purpose"],
                     remote_url=payload.get("remote_url"),
-                    autopush=bool(payload.get("autopush", False)),
+                    autopush=None if payload.get("autopush") is None else bool(payload["autopush"]),
                     generate_skills=bool(payload.get("generate_skills", False)),
                     skill_mode=str(payload.get("skill_mode", "mcp")),
                 )

@@ -15,7 +15,6 @@
 | `LOBE_GIT_PUSH` | `0` | Push every change (`1`, `true`, or `yes`) for lobes that don't set `lobe.autopush`. |
 | `LOBE_GIT_TOKEN` | *(unset)* | Token or `username:token` for HTTPS Git (`clone`, `fetch`, `pull`, `push`, `ls-remote`). See [server.md](server.md#3-push-to-a-git-remote-optional). |
 | `LOBE_GIT_TOKEN_HOST` | `github.com` | The only host `LOBE_GIT_TOKEN` is sent to, for example `codeberg.org` or `gitlab.com`. Remotes on any other host get no token. |
-| `LOBE_SERVER_VERSION` | *(from `plugin.json`)* | Overrides the version reported by MCP `initialize`. |
 
 ## MCP tools
 

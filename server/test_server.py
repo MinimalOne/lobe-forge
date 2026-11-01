@@ -1016,6 +1016,21 @@ Old note.
         assert status == 200 and "k8s-1.29-upgrade" in body["stdout"], body
         assert app.call_mcp_tool("lobe_links", {"lobe": "edits", "page": "-x"})["returncode"] == 1  # not found, not a usage error (2)
 
+        # raw/ is append-only: a second save under the same name is refused and the first stays
+        raw_dir = Path(tmp) / "lobes" / "edits" / "raw"
+        status, body = app.dispatch_http("POST", "/api/lobes/edits/raw", json.dumps({"filename": "2026-11-01-n0.md", "content": "other\n"}).encode())
+        assert status == 409 and "already exists" in body["error"], (status, body)
+        status, _ = app.dispatch_http("POST", "/api/lobes/edits/raw", json.dumps({"filename": "deep/2026-11-01-n0.md", "content": "x\n"}).encode())
+        assert status == 409 and (raw_dir / "2026-11-01-n0.md").read_text() == "note 0\n"
+        assert app.dispatch_http("POST", "/api/lobes/edits/raw", b"[1, 2]")[0] == 400  # not a JSON object
+
+        # REST routes go through the MCP tools: same purpose, same skills, same errors
+        assert app.dispatch_http("GET", "/api/lobes", b"")[1]["lobes"][0]["purpose"] == "Docs layout"
+        rest = app.dispatch_http("GET", "/api/lobes/edits/skills", b"")[1]
+        assert rest == app.call_mcp_tool("lobe_generate_skills", {"lobe": "edits"}) and rest["purpose"] == "Edit tests"
+        assert app.dispatch_http("GET", "/api/lobes/edits/search", b"")[0] == 400
+        assert app.dispatch_http("GET", "/api/lobes/nope/sections", b"")[0] == 404
+
     # Oversized or malformed bodies are refused before they are read, even without a token
     import http.client
     srv = ThreadingHTTPServer(("127.0.0.1", 0), app.LobeHTTPHandler)

@@ -523,8 +523,8 @@ def write_page(
     if section and description:
         # before the page write: index-add fails without writing, so a bad section leaves nothing on disk
         idx = run_wiki_tool(lobe, "index-add", "--section", section, "--page", clean_slug, "--description", description)
-        if idx["returncode"] != 0:
-            raise RuntimeError((idx["stderr"] or idx["stdout"]).strip())
+        if idx["returncode"] != 0:  # unknown section: a bad request (400), not a conflict
+            raise ValueError((idx["stderr"] or idx["stdout"]).strip())
         staged.append(str((paths["WIKI"] / "index.md").relative_to(paths["REPO"])))
     page_file.write_text(content, encoding="utf-8")
 

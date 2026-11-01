@@ -319,6 +319,14 @@ def test_part2_http_rest_and_mcp_e2e() -> None:
                 token=tok,
             )
             assert code == 409 and "changed since it was read" in stale["error"]
+            code, bad_idx = http_req(
+                base_url,
+                "PUT",
+                "/api/lobes/hack/pages/new-page",
+                {"content": "x", "section": "No Such Section", "description": "x"},
+                token=tok,
+            )
+            assert code == 400 and "not found" in bad_idx["error"]
 
             # 4. Search isolation (hit in hack, zero bleed into personal), links, and strict lint
             code, sr_hack = http_req(base_url, "GET", "/api/lobes/hack/search?q=eeprom|nvme", token=tok)
@@ -812,8 +820,9 @@ Old note.
         # A bad index section fails before anything is written (an already-indexed page skips index-add)
         try:
             app.write_page("edits", "brand-new", "clobber", section="No Such Section", description="x")
-            raise AssertionError("Expected RuntimeError for unknown index section")
-        except RuntimeError:
+            raise AssertionError("Expected ValueError for unknown index section")
+        except ValueError as exc:
+            assert "not found" in str(exc)
             pass
         assert not (page_file.parent / "brand-new.md").exists()
         assert app.git(page_file.parents[1], "status", "--porcelain").stdout == ""

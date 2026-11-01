@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  actions: write  # start the ghcr image build for a new release
 
 concurrency: release
 
@@ -39,3 +40,5 @@ jobs:
             git push origin HEAD:main
           fi
           gh release create "v$V" --target "$(git rev-parse HEAD)" --title "v$V" --notes-file "$RUNNER_TEMP/notes.md"
+          # Releases made with GITHUB_TOKEN start no workflows; workflow_dispatch is the exception.
+          gh workflow run ghcr.yml --ref "v$V"

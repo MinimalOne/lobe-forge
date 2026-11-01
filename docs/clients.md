@@ -246,7 +246,7 @@ With a lobe connected, ask in plain words. The tool picks the `lobe_*` tools its
 | You say | Tools used |
 | :--- | :--- |
 | *"Save this page to my homelab lobe: https://example.com/article"* | `lobe_add_raw` |
-| *"Ingest the pending sources in my homelab lobe."* | `lobe_pending`, `lobe_search`, `lobe_write_page`, `lobe_lint` |
+| *"Ingest the pending sources in my homelab lobe."* | `lobe_pending`, `lobe_search`, `lobe_write_page`, `lobe_edit_page`, `lobe_lint` |
 | *"Ask my homelab lobe how the reverse proxy is set up."* | `lobe_search`, `lobe_read_page` |
 | *"Check my homelab lobe for broken links."* | `lobe_lint` |
 | *"Create a `german` lobe for my B1 grammar notes."* | `lobe_create` |

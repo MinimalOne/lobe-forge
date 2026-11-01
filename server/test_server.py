@@ -300,6 +300,34 @@ def test_part2_http_rest_and_mcp_e2e() -> None:
             code, rd = http_req(base_url, "GET", "/api/lobes/hack/pages/pi5-setup", token=tok)
             assert code == 200 and rd["slug"] == "pi5-setup" and "sudo rpi-eeprom-config" in rd["content"]
 
+            # 3b. Partial read, PATCH edit, and stale-sha conflict over REST
+            code, part = http_req(base_url, "GET", "/api/lobes/hack/pages/pi5-setup?start_line=1&end_line=2", token=tok)
+            assert code == 200 and part["content"] == "---\ntitle: Raspberry Pi 5 Setup\n" and part["end_line"] == 2
+            code, ed = http_req(
+                base_url,
+                "PATCH",
+                "/api/lobes/hack/pages/pi5-setup",
+                {"edits": [{"op": "append", "content": "PATCHed line."}], "expected_sha": rd["sha"]},
+                token=tok,
+            )
+            assert code == 200 and ed["committed"] is True and ed["sha"] != rd["sha"]
+            code, stale = http_req(
+                base_url,
+                "PATCH",
+                "/api/lobes/hack/pages/pi5-setup",
+                {"edits": [{"op": "append", "content": "lost"}], "expected_sha": rd["sha"]},
+                token=tok,
+            )
+            assert code == 409 and "changed since it was read" in stale["error"]
+            code, bad_idx = http_req(
+                base_url,
+                "PUT",
+                "/api/lobes/hack/pages/new-page",
+                {"content": "x", "section": "No Such Section", "description": "x"},
+                token=tok,
+            )
+            assert code == 400 and "not found" in bad_idx["error"]
+
             # 4. Search isolation (hit in hack, zero bleed into personal), links, and strict lint
             code, sr_hack = http_req(base_url, "GET", "/api/lobes/hack/search?q=eeprom|nvme", token=tok)
             assert code == 200 and "[[pi5-setup]]" in sr_hack["stdout"]
@@ -479,6 +507,28 @@ def test_part2_http_rest_and_mcp_e2e() -> None:
                 token=tok,
             )
             assert code == 200 and err_call["result"]["isError"] is True
+
+            code, edit_call = http_req(
+                base_url,
+                "POST",
+                "/mcp",
+                {
+                    "jsonrpc": "2.0",
+                    "id": 5,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "lobe_edit_page",
+                        "arguments": {
+                            "lobe": "hack",
+                            "slug": "pi5-setup",
+                            "edits": [{"op": "find_replace", "find": "Conflict line from hack.", "content": "MCP-edited line."}],
+                        },
+                    },
+                },
+                token=tok,
+            )
+            assert code == 200 and edit_call["result"]["isError"] is False, edit_call
+            assert "MCP-edited line." in (lobes_dir / "hack" / "wiki" / "pi5-setup.md").read_text(encoding="utf-8")
 
             # 8. MCP over stdio (--stdio subprocess)
             stdio_input = "\n".join([
@@ -671,6 +721,130 @@ def test_part4_oauth_resource_server() -> None:
             os.environ.pop(k, None)
 
 
+def test_part5_partial_reads_edits_and_write_lock() -> None:
+    page = SAMPLE_PAGE + """
+## Setup
+
+Flash the EEPROM.
+
+```bash
+## not a heading
+```
+
+## Notes
+
+Old note.
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["LOBES_DIR"] = str(Path(tmp) / "lobes")
+        os.environ.pop("LOBE_GIT_PUSH", None)
+        app.create_lobe("edits", "Edit tests")
+        w = app.write_page("edits", "pi5-setup", page, section="General", description="Pi notes.")
+        page_file = Path(tmp) / "lobes" / "edits" / "wiki" / "pi5-setup.md"
+
+        full = app.read_page("edits", "pi5-setup")
+        assert full["content"] == page and full["sha"] == w["sha"] and full["lines"] == len(page.splitlines())
+
+        # Section read stops at the next real `## ` heading, not one inside a code fence
+        setup = app.read_page("edits", "pi5-setup", section="setup")
+        assert setup["content"].startswith("## Setup\n") and "## not a heading" in setup["content"]
+        assert "Old note." not in setup["content"]
+        assert app.read_page("edits", "pi5-setup", section="Notes")["content"] == "## Notes\n\nOld note.\n"
+        rng = app.read_page("edits", "pi5-setup", start_line=setup["start_line"], end_line=setup["start_line"])
+        assert rng["content"] == "## Setup\n" and rng["sections"] == ["Setup", "Notes"]
+        assert "sections" not in full
+        crlf = app.h2_spans(["---\r\n", "## yaml\r\n", "---\r\n", "## Real\r\n"])
+        assert [n for n, _, _ in crlf] == ["Real"]
+        for bad in [{"section": "Missing"}, {"start_line": 9999}, {"start_line": 1, "end_line": 0}, {"start_line": 0}]:
+            try:
+                app.read_page("edits", "pi5-setup", **bad)
+                raise AssertionError(f"Expected ValueError for {bad}")
+            except ValueError:
+                pass
+
+        # Edits: all applied in one commit, sections stay well-formed
+        index_file = page_file.parent / "index.md"
+        index_file.write_text("".join(l for l in index_file.read_text().splitlines(True) if "[[pi5-setup]]" not in l))
+        app.git(page_file.parents[1], "commit", "-qam", "test: drop index row")
+        head = lambda: app.git(page_file.parents[1], "rev-parse", "HEAD").stdout.strip()  # noqa: E731
+        before = head()
+        res = app.edit_page(
+            "edits",
+            "pi5-setup",
+            [
+                {"op": "find_replace", "find": "source_count: 1", "content": "source_count: 2"},
+                {"op": "append", "section": "Setup", "content": "Then reboot."},
+                {"op": "replace_section", "section": "Notes", "content": "New note."},
+                {"op": "append", "content": "Tail line."},
+            ],
+            expected_sha=full["sha"],
+            index_section="General",
+            index_description="Pi notes, edited.",
+        )
+        text = page_file.read_text(encoding="utf-8")
+        assert res["committed"] is True and res["sha"] == app.page_sha(text)
+        assert app.git(page_file.parents[1], "rev-list", "--count", f"{before}..HEAD").stdout.strip() == "1"
+        assert "source_count: 2" in text and "Old note." not in text
+        assert "Pi notes, edited." in index_file.read_text(encoding="utf-8")
+        assert "```\nThen reboot.\n\n## Notes\n\nNew note.\nTail line.\n" in text, text
+
+        # A failing edit aborts the whole batch; a stale sha is refused
+        after = head()
+        for edits, sha, exc in [
+            ([{"op": "append", "content": "x"}, {"op": "find_replace", "find": "nope", "content": "y"}], None, ValueError),
+            ([{"op": "find_replace", "find": "a", "content": "b", "expected_count": 1}], None, ValueError),
+            ([{"op": "append", "content": "x"}], full["sha"], RuntimeError),
+            ([{"op": "delete", "content": ""}], None, ValueError),
+            ([{"op": "append", "content": None}], None, ValueError),
+            ([{"op": "find_replace", "find": "Tail line.", "content": "x", "expected_count": None}], None, None),
+            ([{"op": "find_replace", "find": "Tail line.", "content": "x", "expected_count": 0}], None, ValueError),
+            (["not-an-object"], None, ValueError),
+            ("not-a-list", None, ValueError),
+        ]:
+            if exc is None:  # null expected_count means the default of 1: validate it without committing
+                assert app.apply_edit(text, edits[0]).endswith("x\n")
+                continue
+            try:
+                app.edit_page("edits", "pi5-setup", edits, expected_sha=sha)
+                raise AssertionError(f"Expected {exc.__name__} for {edits}")
+            except exc:
+                pass
+        assert page_file.read_text(encoding="utf-8") == text and head() == after
+        try:
+            app.write_page("edits", "pi5-setup", "clobber", expected_sha=full["sha"])
+            raise AssertionError("Expected RuntimeError for stale write")
+        except RuntimeError:
+            pass
+        assert page_file.read_text(encoding="utf-8") == text
+
+        # A bad index section fails before anything is written (an already-indexed page skips index-add)
+        try:
+            app.write_page("edits", "brand-new", "clobber", section="No Such Section", description="x")
+            raise AssertionError("Expected ValueError for unknown index section")
+        except ValueError as exc:
+            assert "not found" in str(exc)
+            pass
+        assert not (page_file.parent / "brand-new.md").exists()
+        assert app.git(page_file.parents[1], "status", "--porcelain").stdout == ""
+
+        # Parallel writers: every commit lands, none fails on git's index.lock
+        errors: list[Exception] = []
+
+        def save(i: int) -> None:
+            try:
+                app.add_raw("edits", f"2026-11-01-n{i}.md", f"note {i}\n")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=save, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errors, errors
+        assert app.git(page_file.parents[1], "rev-list", "--count", f"{after}..HEAD").stdout.strip() == "8"
+
+
 if __name__ == "__main__":
     test_part1_core_and_git_scenarios()
     print("OK: Part 1 core & Git E2E scenarios passed")
@@ -680,3 +854,5 @@ if __name__ == "__main__":
     print("OK: Part 3 container isolation & compose verification passed")
     test_part4_oauth_resource_server()
     print("OK: Part 4 OAuth resource server passed")
+    test_part5_partial_reads_edits_and_write_lock()
+    print("OK: Part 5 partial reads, edits & write lock passed")

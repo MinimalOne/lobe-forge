@@ -34,8 +34,9 @@ lobe-server implements MCP protocol version `2025-06-18` over Streamable HTTP (`
 | `lobe_lint` | `lobe` | `strict` | Check frontmatter, links, orphans, and index drift. |
 | `lobe_add_raw` | `lobe`, `filename`, `content` | | Save a source in `raw/`, commit, and push if enabled. |
 | `lobe_read_raw` | `lobe`, `filename` | | Read `raw/<filename>`. |
-| `lobe_read_page` | `lobe`, `slug` | | Read `wiki/<slug>.md`. |
-| `lobe_write_page` | `lobe`, `slug`, `content` | `section`, `description`, `log_entry` | Write `wiki/<slug>.md`, optionally add it to `index.md` and append to `log.md`, commit, and push if enabled. |
+| `lobe_read_page` | `lobe`, `slug` | `section`, `start_line`, `end_line` | Read `wiki/<slug>.md`, or only one `## ` section or a line range. Returns `sha` and the page's `lines`; a partial read also lists the page's `sections`. |
+| `lobe_write_page` | `lobe`, `slug`, `content` | `section`, `description`, `log_entry`, `expected_sha` | Write `wiki/<slug>.md`, optionally add it to `index.md` and append to `log.md`, commit, and push if enabled. With `expected_sha`, fails if the page changed since it was read. |
+| `lobe_edit_page` | `lobe`, `slug`, `edits` | `expected_sha`, `log_entry`, `index_section`, `index_description` | Change part of an existing page. Each edit is `find_replace` (`find`, `content`, `expected_count`), `append` (`content`, `section`), or `replace_section` (`section`, `content`). All edits apply in one commit, or none do. |
 
 ## REST API
 
@@ -57,8 +58,9 @@ The full specification is in [`openapi.yaml`](../openapi.yaml) (OpenAPI 3.1). Se
 | `GET` | `/api/lobes/{lobe}/lint?strict=true` | Wiki health check (`returncode: 0` when clean). |
 | `POST` | `/api/lobes/{lobe}/raw` | Save a source and commit. Body: `{"filename", "content"}`. |
 | `GET` | `/api/lobes/{lobe}/raw/{filename}` | Read a source. |
-| `GET` | `/api/lobes/{lobe}/pages/{slug}` | Read a page. |
-| `PUT` | `/api/lobes/{lobe}/pages/{slug}` | Write a page; optional `section` + `description` add it to the index, `log_entry` appends to the log. |
+| `GET` | `/api/lobes/{lobe}/pages/{slug}?section=Setup` | Read a page, or one section (`section`) or a line range (`start_line`, `end_line`). |
+| `PUT` | `/api/lobes/{lobe}/pages/{slug}` | Write a page; optional `section` + `description` add it to the index, `log_entry` appends to the log, `expected_sha` refuses a stale write with `409`. |
+| `PATCH` | `/api/lobes/{lobe}/pages/{slug}` | Edit part of a page. Body: `{"edits": [...], "expected_sha?", "log_entry?", "index_section?", "index_description?"}`. Returns `409` if the page changed since `expected_sha`. |
 | `POST` | `/mcp` | MCP JSON-RPC 2.0 endpoint (Streamable HTTP). |
 
 ### Examples

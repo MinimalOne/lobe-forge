@@ -44,7 +44,7 @@ Every way in reaches the same `lobe_*` operations (search, read, write, lint), s
 ## Git: commit always, push optionally
 
 - **Local lobes**: every ingest creates a commit. Push when you want.
-- **lobe-server**: every write (`lobe_add_raw`, `lobe_write_page`) commits on the server. It pushes to `origin` only when the lobe has a remote and auto-push is on. `lobe_sync` fetches, rebases (`git pull --rebase`), and pushes. On a rebase conflict it aborts cleanly and returns `409 Conflict`.
+- **lobe-server**: every write (`lobe_add_raw`, `lobe_write_page`, `lobe_edit_page`) commits on the server. Writes run one at a time, so parallel clients never collide on Git. It pushes to `origin` only when the lobe has a remote and auto-push is on. `lobe_sync` fetches, rebases (`git pull --rebase`), and pushes. On a rebase conflict it aborts cleanly and returns `409 Conflict`.
 
 Without a remote, everything stays on the machine that holds the lobe.
 
@@ -60,7 +60,7 @@ Both operate on the same repository layout, so one lobe can be a local clone on 
 | :--- | :--- | :--- |
 | Create or clone a lobe | `/lobe-forge` | `lobe_create` |
 | Save a source | `/<name>-add-raw` | `lobe_add_raw` |
-| Ingest a source | `/<name>-ingest` | `lobe_pending` → `lobe_search` → `lobe_read_page` → `lobe_sections` → `lobe_write_page` → `lobe_lint` |
+| Ingest a source | `/<name>-ingest` | `lobe_pending` → `lobe_search` → `lobe_read_page` → `lobe_sections` → `lobe_write_page` / `lobe_edit_page` → `lobe_lint` |
 | Answer a question | `/<name>-ask` | `lobe_search` → `lobe_links` → `lobe_read_page` |
 | Check wiki health | `/<name>-lint` | `lobe_lint` |
 | Sync with the remote | `git pull --rebase && git push` | `lobe_sync` |

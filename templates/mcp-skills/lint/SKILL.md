@@ -47,5 +47,5 @@ Total: N — fix G, C, H first, then B, D, and I.
 
 Ask the user which issues to fix, then:
 1. Read only the flagged pages using **`lobe_read_page`** (`{"lobe": "{{NAME}}", "slug": "<page>"}`).
-2. Fix frontmatter (`source_count`, `sources`, `atoms`), broken `[[links]]`, orphan backlinks, or missing index rows using **`lobe_write_page`** (`{"lobe": "{{NAME}}", "slug": "<page>", "content": "...", "section": "...", "description": "..."}`).
+2. Fix frontmatter (`source_count`, `sources`, `atoms`), broken `[[links]]`, orphan backlinks, or missing index rows using **`lobe_edit_page`** with only the changed text (`{"lobe": "{{NAME}}", "slug": "<page>", "expected_sha": "<sha from lobe_read_page>", "edits": [{"op": "find_replace", "find": "...", "content": "..."}]}`). For a missing index row, also pass `index_section` and `index_description`.
 3. Re-run **`lobe_lint`** (`{"lobe": "{{NAME}}", "strict": true}`) to confirm zero hard errors.

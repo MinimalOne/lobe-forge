@@ -352,7 +352,28 @@ paths:
           pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
     get:
       operationId: readWikiPage
-      summary: Read a Markdown page from the lobe's `wiki/` folder
+      summary: Read a Markdown page from the lobe's `wiki/` folder, or one section or line range of it
+      parameters:
+        - name: section
+          in: query
+          required: false
+          description: Return only this `## ` section (heading text, case-insensitive)
+          schema:
+            type: string
+        - name: start_line
+          in: query
+          required: false
+          description: First line to return (1-based, counts frontmatter)
+          schema:
+            type: integer
+            minimum: 1
+        - name: end_line
+          in: query
+          required: false
+          description: Last line to return (inclusive)
+          schema:
+            type: integer
+            minimum: 1
       responses:
         "200":
           description: Wiki page content
@@ -360,6 +381,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ReadPageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -377,6 +400,34 @@ paths:
       responses:
         "200":
           description: Page written and committed locally (with optional remote push)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WritePageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+    patch:
+      operationId: editWikiPage
+      summary: Change part of an existing wiki page and commit once
+      description: |
+        Applies `edits` in order. If any edit fails, none are applied. Returns `409` when
+        `expected_sha` no longer matches the page.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EditPageRequest"
+      responses:
+        "200":
+          description: Page edited and committed locally (with optional remote push)
           content:
             application/json:
               schema:
@@ -675,7 +726,7 @@ components:
 
     ReadPageResponse:
       type: object
-      required: [lobe, slug, path, content]
+      required: [lobe, slug, path, sha, lines, content]
       properties:
         lobe:
           type: string
@@ -684,6 +735,23 @@ components:
         path:
           type: string
           example: wiki/lobe-server-pi5.md
+        sha:
+          type: string
+          description: Short SHA-256 of the whole page; pass as `expected_sha` to guard a later write
+        lines:
+          type: integer
+          description: Total lines in the page
+        start_line:
+          type: integer
+          description: First returned line, present only for a section or line-range read
+        end_line:
+          type: integer
+          description: Last returned line, present only for a section or line-range read
+        sections:
+          type: array
+          items:
+            type: string
+          description: The page's `## ` headings, present only for a section or line-range read
         content:
           type: string
 
@@ -703,6 +771,52 @@ components:
         log_entry:
           type: string
           description: Optional markdown block to append to `wiki/log.md` in the same commit
+        expected_sha:
+          type: string
+          description: '`sha` from a read; the write fails with 409 if the page changed since'
+
+    PageEdit:
+      type: object
+      required: [op, content]
+      properties:
+        op:
+          type: string
+          enum: [find_replace, append, replace_section]
+        content:
+          type: string
+          description: Replacement or appended text
+        find:
+          type: string
+          description: "find_replace: exact text to replace"
+        expected_count:
+          type: integer
+          default: 1
+          description: "find_replace: required number of matches"
+        section:
+          type: string
+          description: "append / replace_section: `## ` heading text"
+
+    EditPageRequest:
+      type: object
+      required: [edits]
+      properties:
+        edits:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/PageEdit"
+        expected_sha:
+          type: string
+          description: '`sha` from a read; the edit fails with 409 if the page changed since'
+        log_entry:
+          type: string
+          description: Optional markdown block to append to `wiki/log.md` in the same commit
+        index_section:
+          type: string
+          description: With `index_description`, add the page to this `wiki/index.md` section
+        index_description:
+          type: string
+          description: Optional <=25-word description for `wiki/index.md`
 
     WritePageResponse:
       allOf:
@@ -715,6 +829,9 @@ components:
               type: string
             created:
               type: boolean
+            sha:
+              type: string
+              description: Short SHA-256 of the page after the write
         - $ref: "#/components/schemas/GitCommitStatus"
 
     JsonRpcRequest:

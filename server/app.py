@@ -10,12 +10,14 @@ from __future__ import annotations
 import argparse
 import base64
 import functools
+import hashlib
 import hmac
 import json
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +29,16 @@ ROOT = Path(__file__).resolve().parent.parent
 FORGE_SCRIPT = ROOT / "scripts" / "forge.py"
 PLUGIN_JSON = ROOT / ".claude-plugin" / "plugin.json"
 NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+# ThreadingHTTPServer runs requests in parallel; one lock keeps page check-then-write and git commits atomic.
+_WRITE_LOCK = threading.RLock()
+
+
+def serialized(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _WRITE_LOCK:
+            return fn(*args, **kwargs)
+    return wrapper
 
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
@@ -259,6 +271,7 @@ def generate_lobe_skills(lobe: str, mode: str = "mcp") -> dict[str, Any]:
     }
 
 
+@serialized
 def create_lobe(
     name: str,
     purpose: str,
@@ -310,6 +323,7 @@ def create_lobe(
     return out
 
 
+@serialized
 def configure_remote(
     lobe: str,
     remote_url: str | None,
@@ -332,6 +346,7 @@ def configure_remote(
     return {"lobe": lobe, "remote": has_remote(repo), "autopush": bool(remote_url and autopush)}
 
 
+@serialized
 def sync_lobe(lobe: str, push: bool = True) -> dict[str, Any]:
     """Pull latest changes from origin (with safe rebase abort on conflict) and optionally push."""
     repo = l_paths(lobe)["REPO"]
@@ -380,6 +395,7 @@ def run_wiki_tool(lobe: str, *args: str) -> dict[str, Any]:
     }
 
 
+@serialized
 def add_raw(lobe: str, filename: str, content: str) -> dict[str, Any]:
     safe_name = Path(filename).name
     if not safe_name or safe_name in (".", ".."):
@@ -409,20 +425,80 @@ def read_raw(lobe: str, filename: str) -> dict[str, Any]:
     }
 
 
-def read_page(lobe: str, slug: str) -> dict[str, Any]:
+def page_sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def h2_spans(lines: list[str]) -> list[tuple[str, int, int]]:
+    """(heading text, heading index, end index exclusive) for each `## ` heading outside frontmatter and ``` fences."""
+    start = 0
+    if lines and lines[0].rstrip("\n") == "---":
+        start = next((i + 1 for i in range(1, len(lines)) if lines[i].rstrip("\n") == "---"), 0)
+    heads, fenced = [], False
+    for i in range(start, len(lines)):
+        if lines[i].lstrip().startswith("```"):
+            fenced = not fenced
+        elif not fenced and lines[i].startswith("## "):
+            heads.append(i)
+    return [(lines[h][3:].strip(), h, e) for h, e in zip(heads, heads[1:] + [len(lines)])]
+
+
+def section_span(lines: list[str], section: str) -> tuple[int, int]:
+    want = section.strip().removeprefix("## ").strip().lower()
+    spans = h2_spans(lines)
+    for name, s, e in spans:
+        if name.lower() == want:
+            return s, e
+    names = ", ".join(n for n, _, _ in spans) or "(no ## sections)"
+    raise ValueError(f"Section {section!r} not found; page has: {names}")
+
+
+def check_sha(text: str | None, expected_sha: str | None) -> None:
+    if expected_sha is None:
+        return
+    current = page_sha(text) if text is not None else None
+    if current != expected_sha:
+        raise RuntimeError(
+            f"Page changed since it was read (expected_sha {expected_sha}, current {current or 'none: page does not exist'}). "
+            "Read it again and reapply the change."
+        )
+
+
+def read_page(
+    lobe: str,
+    slug: str,
+    section: str | None = None,
+    start_line: int | None = None,
+    end_line: int | None = None,
+) -> dict[str, Any]:
     clean_slug = Path(slug).stem
     paths = l_paths(lobe)
     page_file = paths["WIKI"] / f"{clean_slug}.md"
     if not page_file.exists():
         raise FileNotFoundError(f"Page {clean_slug!r} not found in lobe {lobe!r}")
-    return {
+    text = page_file.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    out: dict[str, Any] = {
         "lobe": lobe,
         "slug": clean_slug,
         "path": str(page_file.relative_to(paths["REPO"])),
-        "content": page_file.read_text(encoding="utf-8"),
+        "sha": page_sha(text),
+        "lines": len(lines),
     }
+    if section:
+        s, e = section_span(lines, section)
+        start_line, end_line = s + 1, e
+    if start_line is None and end_line is None:
+        out["content"] = text
+        return out
+    start, end = max(1, int(start_line or 1)), min(len(lines), int(end_line or len(lines)))
+    if start > end:
+        raise ValueError(f"Empty line range {start_line}-{end_line} (page has {len(lines)} lines)")
+    out.update(start_line=start, end_line=end, content="".join(lines[start - 1 : end]))
+    return out
 
 
+@serialized
 def write_page(
     lobe: str,
     slug: str,
@@ -430,6 +506,7 @@ def write_page(
     section: str | None = None,
     description: str | None = None,
     log_entry: str | None = None,
+    expected_sha: str | None = None,
 ) -> dict[str, Any]:
     clean_slug = Path(slug).stem
     if not NAME_RE.match(clean_slug):
@@ -437,6 +514,7 @@ def write_page(
     paths = l_paths(lobe)
     page_file = paths["WIKI"] / f"{clean_slug}.md"
     is_new = not page_file.exists()
+    check_sha(None if is_new else page_file.read_text(encoding="utf-8"), expected_sha)
     page_file.write_text(content, encoding="utf-8")
 
     staged = [str(page_file.relative_to(paths["REPO"]))]
@@ -455,7 +533,61 @@ def write_page(
 
     action = "create" if is_new else "update"
     git_info = git_commit_and_optional_push(paths["REPO"], f"wiki: {action} {clean_slug}", staged)
-    return {"lobe": lobe, "slug": clean_slug, "created": is_new, **git_info}
+    return {"lobe": lobe, "slug": clean_slug, "created": is_new, "sha": page_sha(content), **git_info}
+
+
+def apply_edit(text: str, edit: dict[str, Any]) -> str:
+    op, content = edit.get("op"), edit.get("content", "")
+    if op == "find_replace":
+        find = edit.get("find") or ""
+        if not find:
+            raise ValueError("find_replace needs a non-empty 'find'")
+        expected = int(edit.get("expected_count", 1))
+        found = text.count(find)
+        if found != expected:
+            raise ValueError(f"'find' text matched {found} time(s), expected {expected}: {find[:80]!r}")
+        return text.replace(find, content)
+    if op not in ("append", "replace_section"):
+        raise ValueError(f"Unknown edit op {op!r} (use find_replace, append, or replace_section)")
+    block = content if content.endswith("\n") else content + "\n"
+    section = edit.get("section")
+    if op == "append" and not section:
+        return (text if text.endswith("\n") or not text else text + "\n") + block
+    if not section:
+        raise ValueError("replace_section needs 'section'")
+    lines = text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    s, e = section_span(lines, section)
+    if op == "append":
+        kept = lines[s:e]
+        while len(kept) > 1 and not kept[-1].strip():
+            kept.pop()
+    else:
+        kept = [lines[s], "\n"]  # keep the heading, replace everything under it
+    gap = ["\n"] if e < len(lines) else []
+    return "".join(lines[:s] + kept + [block] + gap + lines[e:])
+
+
+@serialized
+def edit_page(
+    lobe: str,
+    slug: str,
+    edits: list[dict[str, Any]],
+    expected_sha: str | None = None,
+    log_entry: str | None = None,
+    index_section: str | None = None,
+    index_description: str | None = None,
+) -> dict[str, Any]:
+    """Apply edits in order to an existing page and commit once; any failing edit aborts all of them."""
+    if not edits:
+        raise ValueError("edits must be a non-empty list")
+    page = read_page(lobe, slug)
+    check_sha(page["content"], expected_sha)
+    text = page["content"]
+    for edit in edits:
+        text = apply_edit(text, edit)
+    return write_page(lobe, page["slug"], text, index_section, index_description, log_entry, expected_sha=page["sha"])
 
 
 # ── Part 2: MCP Tool Definitions & JSON-RPC 2.0 Dispatcher ──────────────────
@@ -619,10 +751,19 @@ MCP_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "lobe_read_page",
-        "description": "Read a markdown page from the lobe's wiki/ folder.",
+        "description": (
+            "Read a markdown page from the lobe's wiki/ folder, or only one `## ` section or a line range "
+            "(use the [L<start>-<end>] range from lobe_search). Returns `sha` for expected_sha on later writes."
+        ),
         "inputSchema": {
             "type": "object",
-            "properties": {"lobe": {"type": "string"}, "slug": {"type": "string"}},
+            "properties": {
+                "lobe": {"type": "string"},
+                "slug": {"type": "string"},
+                "section": {"type": "string", "description": "Return only this `## ` section (heading text, case-insensitive)."},
+                "start_line": {"type": "integer", "description": "First line to return (1-based, counts frontmatter)."},
+                "end_line": {"type": "integer", "description": "Last line to return (inclusive)."},
+            },
             "required": ["lobe", "slug"],
         },
     },
@@ -638,8 +779,43 @@ MCP_TOOLS: list[dict[str, Any]] = [
                 "section": {"type": "string", "description": "Optional index.md section for new pages."},
                 "description": {"type": "string", "description": "Optional <=25-word index description."},
                 "log_entry": {"type": "string", "description": "Optional markdown block to append to wiki/log.md in the same commit."},
+                "expected_sha": {"type": "string", "description": "sha from lobe_read_page; the write fails if the page changed since."},
             },
             "required": ["lobe", "slug", "content"],
+        },
+    },
+    {
+        "name": "lobe_edit_page",
+        "description": (
+            "Change part of an existing wiki page without resending all of it. Applies `edits` in order, "
+            "all or nothing, and commits once. Ops: find_replace (exact text, must match expected_count times), "
+            "append (to the end of the page, or of `section`), replace_section (replace the body under a `## ` heading)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "lobe": {"type": "string"},
+                "slug": {"type": "string"},
+                "edits": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "op": {"type": "string", "enum": ["find_replace", "append", "replace_section"]},
+                            "content": {"type": "string", "description": "Replacement or appended text."},
+                            "find": {"type": "string", "description": "find_replace: exact text to replace."},
+                            "expected_count": {"type": "integer", "description": "find_replace: required number of matches (default 1)."},
+                            "section": {"type": "string", "description": "append/replace_section: `## ` heading text."},
+                        },
+                        "required": ["op", "content"],
+                    },
+                },
+                "expected_sha": {"type": "string", "description": "sha from lobe_read_page; the edit fails if the page changed since."},
+                "log_entry": {"type": "string", "description": "Optional markdown block to append to wiki/log.md in the same commit."},
+                "index_section": {"type": "string", "description": "With index_description: add the page to this index.md section."},
+                "index_description": {"type": "string", "description": "Optional <=25-word index description."},
+            },
+            "required": ["lobe", "slug", "edits"],
         },
     },
 ]
@@ -693,7 +869,7 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
     if name == "lobe_read_raw":
         return read_raw(args["lobe"], args["filename"])
     if name == "lobe_read_page":
-        return read_page(args["lobe"], args["slug"])
+        return read_page(args["lobe"], args["slug"], args.get("section"), args.get("start_line"), args.get("end_line"))
     if name == "lobe_write_page":
         return write_page(
             lobe=args["lobe"],
@@ -702,6 +878,12 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
             section=args.get("section"),
             description=args.get("description"),
             log_entry=args.get("log_entry"),
+            expected_sha=args.get("expected_sha"),
+        )
+    if name == "lobe_edit_page":
+        return edit_page(
+            args["lobe"], args["slug"], args["edits"], args.get("expected_sha"), args.get("log_entry"),
+            args.get("index_section"), args.get("index_description"),
         )
     raise ValueError(f"Unknown MCP tool: {name!r}")
 
@@ -916,7 +1098,8 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
             if sub == "pages" and len(parts) == 5:
                 slug = parts[4]
                 if method == "GET":
-                    return 200, read_page(lobe, slug)
+                    line = lambda k: int(query[k][0]) if k in query else None  # noqa: E731
+                    return 200, read_page(lobe, slug, query.get("section", [None])[0], line("start_line"), line("end_line"))
                 if method == "PUT":
                     return 200, write_page(
                         lobe=lobe,
@@ -925,6 +1108,12 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
                         section=payload.get("section"),
                         description=payload.get("description"),
                         log_entry=payload.get("log_entry"),
+                        expected_sha=payload.get("expected_sha"),
+                    )
+                if method == "PATCH":
+                    return 200, edit_page(
+                        lobe, slug, payload["edits"], payload.get("expected_sha"), payload.get("log_entry"),
+                        payload.get("index_section"), payload.get("index_description"),
                     )
 
         return 404, {"error": f"Not found: {method} {path}"}
@@ -964,6 +1153,9 @@ class LobeHTTPHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         self._handle("PUT")
+
+    def do_PATCH(self) -> None:
+        self._handle("PATCH")
 
     def log_message(self, fmt: str, *args: Any) -> None:
         pass  # keep server output quiet during requests/tests

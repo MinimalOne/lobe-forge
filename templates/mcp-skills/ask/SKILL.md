@@ -44,6 +44,8 @@ For the 1–3 best hits whose `summary`, `atom:`, or `match:` snippet addresses 
 }
 ```
 
+Each hit reports `lines=<N>` and `[L<start>-<end> ## Section]` on its `match:` line. For a page over 120 lines, read only that section: pass `"section": "<Section>"` (or `"start_line": <start>, "end_line": <end>`) instead of reading the whole page.
+
 ### Step 3 — Follow links only when needed
 
 Call **`lobe_links`** (`{"lobe": "{{NAME}}", "page": "<page-slug>"}`) to see incoming and outgoing `[[wikilinks]]` with summaries. Open a linked page with **`lobe_read_page`** only if its summary indicates it holds a missing fact.

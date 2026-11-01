@@ -73,7 +73,7 @@ Read it in full. For images, describe what is shown and transcribe any text.
 
 Present: what the source is (1–2 sentences), 5–10 key takeaways, pages to create, pages to
 update (and what changes), and every **conflict** (current claim vs new claim — ask which is
-right, or whether to record both). End with "Does this look right?" and wait.
+right, or whether to record both). A page already over 200 lines (`lines=` in search hits): propose splitting it into a hub plus sub-pages instead of growing it. End with "Does this look right?" and wait.
 
 ### Step 4 — Write pages
 
@@ -118,6 +118,7 @@ cat >> "$WIKI/log.md" <<'LOG'
 - Updated: <pages>
 - Source: `{{RAW}}/<file>`
 LOG
+"$W" rotate-log      # moves earlier months into {{WIKI}}/log/<YYYY-MM>.md
 "$W" lint --strict
 ```
 
@@ -126,7 +127,7 @@ Fix any hard lint error (broken link, frontmatter, missing source) before commit
 
 ```bash
 W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
-git -C "$REPO" add <each page created or edited> {{WIKI}}/index.md {{WIKI}}/log.md && \
+git -C "$REPO" add <each page created or edited> {{WIKI}}/index.md {{WIKI}}/log.md {{WIKI}}/log && \
   git -C "$REPO" commit -q -m "wiki: ingest <source-slug> — <N> created, <M> updated"
 ```
 

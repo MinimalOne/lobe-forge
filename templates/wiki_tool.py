@@ -12,6 +12,7 @@ Commands:
   set-atoms       Write or replace the frontmatter atoms: list on a wiki page
   pending         List raw/ sources not cited by any wiki page
   convert-legacy  Move legacy bold Summary/Sources/Last updated lines into frontmatter
+  rotate-log      Move log.md entries from earlier months into log/<YYYY-MM>.md
 
 Paths default to this repo's layout (wiki/, raw/). Override with WIKI_ROOT, WIKI_DIR,
 WIKI_RAW_DIR and WIKI_CATALOG to point it at another layout.
@@ -24,6 +25,8 @@ Checks run by lint:
   D  Index discrepancy — file/index out of sync              [quality]
   H  Missing source files — sources: path does not exist     [data error]
   I  Missing atoms — frontmatter has no atoms: list          [quality]
+  J  Long pages — over --max-lines (default 200)             [quality]
+  K  Likely duplicates — similar title/aliases/summary/atoms [quality]
 """
 
 import argparse
@@ -239,7 +242,7 @@ def cmd_lint(args) -> int:
         entries[p.name] = parse_page(p)
 
     page_names = set(entries.keys())
-    issues: dict[str, list[tuple[str, str]]] = {c: [] for c in "GBCDHI"}
+    issues: dict[str, list[tuple[str, str]]] = {c: [] for c in "GBCDHIJK"}
 
     # G — Frontmatter
     legacy_pages = []
@@ -297,6 +300,24 @@ def cmd_lint(args) -> int:
             if not (REPO / src).exists():
                 issues["H"].append((name, f"source '{src}' not found on disk"))
 
+    # J — Long pages: past this size a page dilutes search and costs more to read and update
+    max_lines = getattr(args, "max_lines", 200)
+    for name in entries:
+        lines = (WIKI / name).read_text().splitlines()
+        if len(lines) > max_lines:
+            fenced, n_sec = False, 0
+            for l in lines:
+                if l.lstrip().startswith("```"):
+                    fenced = not fenced
+                elif not fenced and l.startswith("## "):
+                    n_sec += 1
+            issues["J"].append((name, f"{len(lines)} lines, {n_sec} ## section(s): split into a hub page plus sub-pages"))
+    issues["J"].sort(key=lambda it: -int(it[1].split()[0]))
+
+    # K — Likely duplicates
+    for a, b, score, shared in _similar_pairs(entries, getattr(args, "dup_threshold", 0.5)):
+        issues["K"].append((a, f"similar to {b} ({score:.0%} shared words: {', '.join(shared)}): merge them, or link and narrow each"))
+
     # ── Report ────────────────────────────────────────────────────────────────
     labels = {
         "G": "Frontmatter issues",
@@ -305,9 +326,11 @@ def cmd_lint(args) -> int:
         "D": "Index discrepancies",
         "H": "Missing source files",
         "I": "Missing atoms (commands, error fixes, facts, decisions)",
+        "J": f"Long pages (over {max_lines} lines)",
+        "K": "Likely duplicates (similar title, aliases, summary and atoms)",
     }
     # In strict mode only G-data-errors, C, and H are hard errors that block commits.
-    # G-legacy (missing frontmatter), B, D, and I are soft warnings.
+    # G-legacy (missing frontmatter), B, D, I, J, and K are soft warnings.
     strict = getattr(args, "strict", False)
     limit = None if getattr(args, "all", False) else max(1, getattr(args, "limit", 20))
 
@@ -319,9 +342,9 @@ def cmd_lint(args) -> int:
         return 0
 
     n = 1
-    for check in "GBCDHI":
+    for check in "GBCDHIJK":
         items = issues[check]
-        soft_tag = "  [warning — not blocking]" if strict and check in ("B", "D", "I") else ""
+        soft_tag = "  [warning — not blocking]" if strict and check in ("B", "D", "I", "J", "K") else ""
 
         if check == "G":
             leg_count = len(legacy_pages)
@@ -357,6 +380,48 @@ def cmd_lint(args) -> int:
 
     print(f"\nTotal: {total} issue(s)")
     return 1
+
+
+def _similar_pairs(entries: dict[str, dict], threshold: float) -> list[tuple[str, str, float, list[str]]]:
+    """Unlinked page pairs whose slug, title, aliases, summary and atoms share >= threshold of their words (Jaccard)."""
+    names = sorted(n for n, e in entries.items() if e["has_frontmatter"])
+    words: dict[str, set[str]] = {}
+    for n in names:
+        e = entries[n]
+        text = " ".join([n[:-3].replace("-", " "), e["title"], e["summary"], *e["aliases"], *e["atoms"]]).lower()
+        ws = set()
+        for t in re.findall(r"[a-z0-9][a-z0-9_.-]*[a-z0-9]", text):
+            if t in _STOPWORDS or t in _ATOM_KINDS:
+                continue
+            ws.add(t[:-1] if len(t) > 3 and t.endswith("s") and not t.endswith("ss") else t)  # backups == backup
+        words[n] = ws
+    df: dict[str, int] = {}
+    for ws in words.values():
+        for t in ws:
+            df[t] = df.get(t, 0) + 1
+    # words on >10% of pages say nothing about duplication, and are most of the pair work
+    max_df = max(2, len(names) // 10)
+    words = {n: {t for t in ws if df[t] <= max_df} for n, ws in words.items()}
+    postings: dict[str, list[str]] = {}
+    for n, ws in words.items():
+        for t in ws:
+            if df[t] >= 2:
+                postings.setdefault(t, []).append(n)
+    shared: dict[tuple[str, str], int] = {}
+    for docs in postings.values():
+        for i, a in enumerate(docs):
+            for b in docs[i + 1:]:
+                shared[(a, b)] = shared.get((a, b), 0) + 1
+    out = []
+    for (a, b), c in shared.items():
+        if c < 3:  # one or two shared rare words (a port, a year) are a coincidence, not a duplicate
+            continue
+        if b[:-3] in entries[a]["wiki_links"] or a[:-3] in entries[b]["wiki_links"]:
+            continue  # linked pairs were already judged related: hub and sub-page, merged pointer, link and narrow
+        score = c / (len(words[a]) + len(words[b]) - c)
+        if score >= threshold:
+            out.append((a, b, score, sorted(words[a] & words[b], key=lambda t: (df[t], t))[:5]))
+    return sorted(out, key=lambda x: (-x[2], x[0], x[1]))
 
 
 def _print_issues(items: list[tuple[str, str]], n: int, limit: int | None) -> int:
@@ -469,6 +534,8 @@ def _locate_match(full_text: str, body: str, rx: re.Pattern) -> str:
     m = rx.search(body)
     return _one_line(body[max(0, m.start() - 70): m.end() + 70], 170) if m else ""
 
+
+_ATOM_KINDS = {"cmd", "fix", "fact", "decision"}
 
 _STOPWORDS = {"the", "and", "for", "how", "what", "why", "when", "where", "which", "who", "with",
               "does", "did", "can", "are", "was", "not", "this", "that", "from", "into", "about", "you", "your",
@@ -658,6 +725,46 @@ def cmd_index_add(args) -> int:
     return 0
 
 
+# ── rotate-log ────────────────────────────────────────────────────────────────
+
+LOG_ARCHIVE = WIKI / "log"
+
+
+def cmd_rotate_log(args) -> int:
+    """Move log.md entries from months before this one into log/<YYYY-MM>.md, keeping their order."""
+    LOG_ARCHIVE.mkdir(exist_ok=True)  # always: skills `git add` it, and a missing path would fail that commit
+    log = WIKI / "log.md"
+    if not log.exists():
+        return 0
+    text = log.read_text()
+    heads = [m.start() for m in re.finditer(r"(?m)^## ", text)]
+    if not heads:
+        return 0
+    month = getattr(args, "month", None) or datetime.date.today().strftime("%Y-%m")
+    header, keep, moved = text[: heads[0]], [], {}
+    for start, end in zip(heads, heads[1:] + [len(text)]):
+        entry = text[start:end]
+        m = re.match(r"## .*?(\d{4}-\d{2})-\d{2}", entry)
+        if m and m.group(1) < month:
+            moved.setdefault(m.group(1), []).append(entry)
+        else:
+            keep.append(entry)  # this month, or no date: stays
+    if not moved:
+        return 0
+    title = header.splitlines()[0].lstrip("# ").strip() if header.strip() else "Log"
+    for ym, entries in sorted(moved.items()):
+        f = LOG_ARCHIVE / f"{ym}.md"
+        old = f.read_text() if f.exists() else f"# {title} — {ym}\n\n"
+        f.write_text(old.rstrip("\n") + "\n\n" + "".join(entries).strip("\n") + "\n")
+        print(f"{WIKI.name}/log/{ym}.md: {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}")
+    pointer = f"Older entries: `{WIKI.name}/log/<YYYY-MM>.md`, one file per month.\n"
+    if pointer not in header:
+        header = header.rstrip("\n") + "\n\n" + pointer
+    body = "".join(keep).strip("\n")
+    log.write_text(header.rstrip("\n") + ("\n\n" + body + "\n" if body else "\n"))
+    return 0
+
+
 # ── convert-legacy ────────────────────────────────────────────────────────────
 
 LEGACY_META = re.compile(r"^\*\*(Summary|Sources?|Last updated)\*\*:\s*(.*)$")
@@ -820,6 +927,12 @@ def main():
     )
     lint_p.add_argument("--limit", type=int, default=20, help="Issues listed per check (default 20)")
     lint_p.add_argument("--all", action="store_true", help="List every issue (no per-check limit)")
+    lint_p.add_argument("--max-lines", type=int, default=200, help="J: flag pages longer than this (default 200)")
+    lint_p.add_argument("--dup-threshold", type=float, default=0.5,
+                        help="K: flag page pairs sharing at least this share of words, 0-1 (default 0.5)")
+
+    rot_p = sub.add_parser("rotate-log", help="Move log.md entries from earlier months into log/<YYYY-MM>.md")
+    rot_p.add_argument("--month", help="Treat this YYYY-MM as the current month (default: today)")
 
     search_p = sub.add_parser("search", help="Rank pages for one or more terms (BM25F + recency, regex, case-insensitive)")
     search_p.add_argument("terms", nargs="+", help="One term per concept; aliases as alternation, e.g. 'eks|kubernetes'")
@@ -854,7 +967,7 @@ def main():
     else:
         sys.exit({"search": cmd_search, "links": cmd_links, "sections": cmd_sections,
                   "index-add": cmd_index_add, "set-atoms": cmd_set_atoms, "pending": cmd_pending,
-                  "convert-legacy": cmd_convert_legacy}[args.command](args))
+                  "convert-legacy": cmd_convert_legacy, "rotate-log": cmd_rotate_log}[args.command](args))
 
 
 if __name__ == "__main__":

@@ -295,7 +295,8 @@ def test_part2_http_rest_and_mcp_e2e() -> None:
                 token=tok,
             )
             assert code == 200 and wr["created"] is True and wr["committed"] is True
-            assert "Ingest: 2026-10-30-pi5-notes.md" in (lobes_dir / "hack" / "wiki" / "log.md").read_text(encoding="utf-8")
+            hack_logs = [lobes_dir / "hack" / "wiki" / "log.md", *(lobes_dir / "hack" / "wiki" / "log").glob("*.md")]
+            assert any("Ingest: 2026-10-30-pi5-notes.md" in f.read_text(encoding="utf-8") for f in hack_logs)  # may rotate out by date
 
             code, rd = http_req(base_url, "GET", "/api/lobes/hack/pages/pi5-setup", token=tok)
             assert code == 200 and rd["slug"] == "pi5-setup" and "sudo rpi-eeprom-config" in rd["content"]
@@ -826,6 +827,17 @@ Old note.
             pass
         assert not (page_file.parent / "brand-new.md").exists()
         assert app.git(page_file.parents[1], "status", "--porcelain").stdout == ""
+
+        # A write with log_entry rotates earlier months out of log.md, in the same commit
+        log_file = page_file.parent / "log.md"
+        log_file.write_text(log_file.read_text() + "\n## 2020-01-02 — Ingest: old\n\n- old\n")
+        app.git(page_file.parents[1], "commit", "-qam", "test: old log entry")
+        r = app.edit_page("edits", "pi5-setup", [{"op": "append", "content": "Rotated."}], log_entry="## 2099-01-01 — Ingest: new\n\n- new")
+        assert r["committed"] and "Ingest: old" not in log_file.read_text() and "Ingest: new" in log_file.read_text()
+        assert "Ingest: old" in (page_file.parent / "log" / "2020-01.md").read_text()
+        assert "\n\n\n" not in log_file.read_text(), repr(log_file.read_text())
+        assert app.git(page_file.parents[1], "status", "--porcelain").stdout == ""
+        text, after = page_file.read_text(encoding="utf-8"), app.git(page_file.parents[1], "rev-parse", "HEAD").stdout.strip()
 
         # Parallel writers: every commit lands, none fails on git's index.lock
         errors: list[Exception] = []

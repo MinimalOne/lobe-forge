@@ -5,7 +5,7 @@
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `LOBES_DIR` | `/data/lobes` | Folder that holds all lobe repositories. |
-| `LOBE_HOST` | `0.0.0.0` | HTTP bind address (`--host` overrides it). |
+| `LOBE_HOST` | `127.0.0.1` (`0.0.0.0` in the Docker image) | HTTP bind address (`--host` overrides it). |
 | `LOBE_PORT` | `8080` | HTTP port (`--port` overrides it). |
 | `LOBE_API_TOKEN` | *(unset)* | Bearer token for `/api/*` and `/mcp`. If both this and `LOBE_OAUTH_ISSUER` are unset, authentication is off, and the HTTP server then only starts on a loopback address (`127.0.0.1`, `localhost`, `::1`). `/health` is always public. |
 | `LOBE_OAUTH_ISSUER` | *(unset)* | Issuer URL of your OAuth provider, for example `https://auth.example.com/application/o/lobe-server/`. Turns on OAuth for Claude.ai and the Claude mobile app. `LOBE_API_TOKEN` keeps working. |

@@ -182,6 +182,32 @@ def test_part1_core_and_git_scenarios() -> None:
             assert app.git_auth_args_and_env(leak)[0] == [], leak
         args, _ = app.git_auth_args_and_env("https://me@github.com/u/r.git")
         assert args[1].startswith("http.https://github.com/.extraHeader="), args
+
+        # A failed git command reports git's message, never the token: local commands get no auth args
+        app.create_lobe("leak", "Token leak test")
+        leak_repo = app.l_paths("leak")["REPO"]
+        # codeberg, not github: a developer's url.<ssh>.insteadOf for github.com would hide the leak
+        os.environ["LOBE_GIT_TOKEN_HOST"] = "codeberg.org"
+        app.configure_remote("leak", "https://codeberg.org/u/leak.git", autopush=False, verify=False)
+        assert app.git_auth_args_and_env(app.has_remote(leak_repo))[0], "test must use a remote that gets the token"
+        try:
+            app.git(leak_repo, "commit", "-q", "-m", "nothing staged")
+            raise AssertionError("Expected GitError for an empty commit")
+        except app.GitError as exc:
+            assert "ghp_testtoken123" not in str(exc) and "Basic" not in str(exc), str(exc)
+            assert "nothing" in str(exc), str(exc)
+        res = app.handle_mcp_message({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                                      "params": {"name": "lobe_links", "arguments": {"lobe": "leak", "page": "x"}}})
+        assert "Basic" not in json.dumps(res)
+        os.environ.pop("LOBE_GIT_TOKEN_HOST")
+
+        # LOBE_GIT_TOKEN_HOST may carry a scheme and port; a given port must match
+        os.environ["LOBE_GIT_TOKEN_HOST"] = "https://git.internal:8443/"
+        assert app.git_auth_args_and_env("https://git.internal:8443/u/r.git")[0]
+        assert app.git_auth_args_and_env("https://git.internal/u/r.git")[0] == []
+        os.environ["LOBE_GIT_TOKEN_HOST"] = "Codeberg.org"
+        assert app.git_auth_args_and_env("https://codeberg.org:443/u/r.git")[0]
+        os.environ.pop("LOBE_GIT_TOKEN_HOST")
         os.environ.pop("LOBE_GIT_TOKEN", None)
 
         # 8. Clone existing non-empty remote in create_lobe & explicit sync_lobe across two installations

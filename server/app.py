@@ -80,8 +80,10 @@ def git_auth_args_and_env(remote_url: str | None = None) -> tuple[list[str], dic
     token = os.environ.get("LOBE_GIT_TOKEN", "").strip()
     url = urlparse(remote_url or "")
     # Only the configured host gets the token: a caller-chosen remote_url must not receive it.
-    token_host = os.environ.get("LOBE_GIT_TOKEN_HOST", "github.com").strip().lower()
-    if token and url.scheme in ("http", "https") and url.hostname == token_host:
+    # LOBE_GIT_TOKEN_HOST may carry a scheme, port or path; a port, when given, must match too.
+    want = urlparse("//" + os.environ.get("LOBE_GIT_TOKEN_HOST", "github.com").strip().split("://")[-1])
+    if (token and url.scheme in ("http", "https") and url.hostname and url.hostname == want.hostname
+            and (want.port is None or url.port == want.port)):
         if ":" in token:
             creds = token
         elif token.startswith("glpat-") or (remote_url and "gitlab" in remote_url.lower()):
@@ -97,15 +99,25 @@ def git_auth_args_and_env(remote_url: str | None = None) -> tuple[list[str], dic
     return extra_args, env
 
 
+# Only these talk to a remote; every other git command runs without the token on its command line.
+NETWORK_GIT = {"push", "pull", "fetch", "ls-remote", "clone"}
+
+
+class GitError(Exception):
+    """A failed git command, carrying git's own message and never the command line."""
+
+
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    r_url = subprocess.run(
-        ["git", "-C", str(repo), "remote", "get-url", "origin"],
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout.strip() or None
+    r_url = None
+    if args and args[0] in NETWORK_GIT:
+        r_url = subprocess.run(
+            ["git", "-C", str(repo), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip() or None
     auth_args, env = git_auth_args_and_env(r_url)
-    return subprocess.run(
+    r = subprocess.run(
         [
             "git",
             "-C",
@@ -120,8 +132,12 @@ def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
         capture_output=True,
         text=True,
         env=env,
-        check=check,
+        check=False,
     )
+    if check and r.returncode != 0:
+        # not CalledProcessError: its message is the full command line, auth header included
+        raise GitError(f"git {args[0] if args else ''} failed: {(r.stderr or r.stdout).strip() or f'exit {r.returncode}'}")
+    return r
 
 
 def verify_remote_access(remote_url: str) -> bool:
@@ -1198,7 +1214,7 @@ def run_stdio() -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description="lobe-server — REST API & MCP server for lobe-forge")
     p.add_argument("--stdio", action="store_true", help="Run MCP server over stdio")
-    p.add_argument("--host", default=os.environ.get("LOBE_HOST", "0.0.0.0"), help="Bind host")
+    p.add_argument("--host", default=os.environ.get("LOBE_HOST", "127.0.0.1"), help="Bind host")
     p.add_argument("--port", type=int, default=int(os.environ.get("LOBE_PORT", "8080")), help="Bind port")
     args = p.parse_args()
 

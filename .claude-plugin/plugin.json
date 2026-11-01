@@ -1,5 +1,5 @@
 {
   "name": "lobe-forge",
   "description": "Second brain for your AI tools: Git-backed LLM wikis (lobes) that Claude Code, Codex, Gemini CLI, Antigravity and other MCP clients can read and write, locally or on a self-hosted lobe-server",
-  "version": "1.12.0"
+  "version": "1.13.0"
 }

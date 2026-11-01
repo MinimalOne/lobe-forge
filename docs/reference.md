@@ -15,7 +15,6 @@
 | `LOBE_GIT_PUSH` | `0` | Push every change (`1`, `true`, or `yes`) for lobes that don't set `lobe.autopush`. |
 | `LOBE_GIT_TOKEN` | *(unset)* | Token or `username:token` for HTTPS Git (`clone`, `fetch`, `pull`, `push`, `ls-remote`). See [server.md](server.md#3-push-to-a-git-remote-optional). |
 | `LOBE_GIT_TOKEN_HOST` | `github.com` | The only host `LOBE_GIT_TOKEN` is sent to, for example `codeberg.org` or `gitlab.com`. Remotes on any other host get no token. |
-| `LOBE_SERVER_VERSION` | *(from `plugin.json`)* | Overrides the version reported by MCP `initialize`. |
 
 ## MCP tools
 
@@ -57,7 +56,7 @@ The full specification is in [`openapi.yaml`](../openapi.yaml) (OpenAPI 3.1). Se
 | `GET` | `/api/lobes/{lobe}/sections` | `## Section` headings in `wiki/index.md`. |
 | `GET` | `/api/lobes/{lobe}/pending` | Sources in `raw/` that no page cites. |
 | `GET` | `/api/lobes/{lobe}/lint?strict=true` | Wiki health check (`returncode: 0` when clean). |
-| `POST` | `/api/lobes/{lobe}/raw` | Save a source and commit. Body: `{"filename", "content"}`. |
+| `POST` | `/api/lobes/{lobe}/raw` | Save a source and commit. Body: `{"filename", "content"}`. Returns `409` if the file already exists. |
 | `GET` | `/api/lobes/{lobe}/raw/{filename}` | Read a source. |
 | `GET` | `/api/lobes/{lobe}/pages/{slug}?section=Setup` | Read a page, or one section (`section`) or a line range (`start_line`, `end_line`). |
 | `PUT` | `/api/lobes/{lobe}/pages/{slug}` | Write a page; optional `section` + `description` add it to the index, `log_entry` appends to the log, `expected_sha` refuses a stale write with `409`. |

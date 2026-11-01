@@ -46,12 +46,10 @@ import forge  # noqa: E402
 
 
 def server_version() -> str:
-    if PLUGIN_JSON.exists():
-        try:
-            return json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))["version"]
-        except Exception:
-            pass
-    return os.environ.get("LOBE_SERVER_VERSION", "1.9.0")
+    try:
+        return json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))["version"]
+    except (OSError, ValueError, KeyError):
+        return "unknown"
 
 
 def lobes_root() -> Path:
@@ -238,15 +236,9 @@ def list_lobes() -> list[dict[str, Any]]:
     for d in sorted(root.iterdir()):
         if not d.is_dir() or not (d / "wikictl").exists():
             continue
-        paths = l_paths(d.name)
-        repo = paths["REPO"]
-        purpose = ""
-        lobe_md = d / "LOBE.md"
-        if lobe_md.exists():
-            for line in lobe_md.read_text(encoding="utf-8").splitlines():
-                if line.startswith("**Purpose**:"):
-                    purpose = line.split("**Purpose**:", 1)[1].strip()
-                    break
+        repo = l_paths(d.name)["REPO"]
+        settings = forge.lobe_settings(d)
+        purpose = "" if isinstance(settings, str) else settings[1]
         remote = has_remote(repo)
         items.append({
             "name": d.name,
@@ -260,22 +252,10 @@ def list_lobes() -> list[dict[str, Any]]:
 
 def generate_lobe_skills(lobe: str, mode: str = "mcp") -> dict[str, Any]:
     """Render the four <name>-{add-raw,ingest,ask,lint} skills for an existing lobe on lobe-server."""
-    lobe_dir = resolve_lobe(lobe)
-    paths = l_paths(lobe)
-    repo = paths["REPO"]
-    wiki_rel = str(paths["WIKI"].relative_to(repo))
-    raw_rel = str(paths["RAW"].relative_to(repo))
-
-    purpose = f"{lobe} lobe wiki"
-    origin = "new"
-    lobe_md = lobe_dir / "LOBE.md"
-    if lobe_md.exists():
-        for line in lobe_md.read_text(encoding="utf-8").splitlines():
-            if line.startswith("**Purpose**:"):
-                purpose = line.split("**Purpose**:", 1)[1].strip() or purpose
-            elif line.startswith("**Origin**:"):
-                origin = line.split("**Origin**:", 1)[1].strip() or origin
-
+    settings = forge.lobe_settings(resolve_lobe(lobe))
+    if isinstance(settings, str):
+        raise FileNotFoundError(settings)
+    _, purpose, wiki_rel, raw_rel, _, origin = settings
     skills = forge.render_skills(
         name=lobe,
         purpose=purpose,
@@ -438,9 +418,11 @@ def add_raw(lobe: str, filename: str, content: str) -> dict[str, Any]:
         raise ValueError(f"Invalid raw filename: {filename!r}")
     paths = l_paths(lobe)
     raw_file = paths["RAW"] / safe_name
+    rel = str(raw_file.relative_to(paths["REPO"]))
+    if raw_file.exists():  # raw/ is append-only: pages cite a source by path, so its content must not change
+        raise RuntimeError(f"{rel} already exists; save the source under another name")
     raw_file.parent.mkdir(parents=True, exist_ok=True)
     raw_file.write_text(content, encoding="utf-8")
-    rel = str(raw_file.relative_to(paths["REPO"]))
     git_info = git_commit_and_optional_push(paths["REPO"], f"raw: add {safe_name}", [rel])
     return {"lobe": lobe, "path": rel, **git_info}
 
@@ -464,6 +446,11 @@ def read_raw(lobe: str, filename: str) -> dict[str, Any]:
         "path": str(raw_file.relative_to(paths["REPO"])),
         "content": raw_file.read_text(encoding="utf-8", errors="replace"),
     }
+
+
+def page_name(slug: str) -> str:
+    """`wiki/k8s-1.29.md` -> `k8s-1.29`: not Path.stem, which would cut at the last dot and open another page."""
+    return Path(slug).name.removesuffix(".md")
 
 
 def page_sha(text: str) -> str:
@@ -512,7 +499,7 @@ def read_page(
     start_line: int | None = None,
     end_line: int | None = None,
 ) -> dict[str, Any]:
-    clean_slug = Path(slug).stem
+    clean_slug = page_name(slug)
     paths = l_paths(lobe)
     page_file = paths["WIKI"] / f"{clean_slug}.md"
     if not page_file.exists():
@@ -552,7 +539,7 @@ def write_page(
     log_entry: str | None = None,
     expected_sha: str | None = None,
 ) -> dict[str, Any]:
-    clean_slug = Path(slug).stem
+    clean_slug = page_name(slug)
     if not SLUG_RE.match(clean_slug):
         raise ValueError(f"Invalid page slug: {slug!r} (expected lowercase letters, digits, hyphens)")
     paths = l_paths(lobe)
@@ -908,10 +895,10 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
         terms = [t for t in args.get("terms", []) if t]
         if not terms:
             raise ValueError("terms must be a non-empty list of search strings")
-        cmd = ["search", *(["--no-decay"] if args.get("no_decay") else []), *terms]
+        cmd = ["search", *(["--no-decay"] if args.get("no_decay") else []), "--", *terms]
         return run_wiki_tool(args["lobe"], *cmd)
     if name == "lobe_links":
-        return run_wiki_tool(args["lobe"], "links", args["page"])
+        return run_wiki_tool(args["lobe"], "links", "--", args["page"])
     if name == "lobe_sections":
         return run_wiki_tool(args["lobe"], "sections")
     if name == "lobe_pending":
@@ -945,6 +932,8 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
 
 def handle_mcp_message(msg: dict[str, Any]) -> dict[str, Any] | None:
     """Process a single JSON-RPC 2.0 MCP message and return a response dict (or None for notifications)."""
+    if not isinstance(msg, dict):  # e.g. a JSON-RPC batch: one bad message must not crash the stdio loop or 500 over HTTP
+        return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request: expected one JSON-RPC object"}}
     method = msg.get("method", "")
     msg_id = msg.get("id")
     params = msg.get("params") or {}
@@ -1055,7 +1044,7 @@ def introspect_token(token: str) -> bool:
         return False
     for k, v in list(_TOKEN_CACHE.items()):
         if v <= now:
-            del _TOKEN_CACHE[k]
+            _TOKEN_CACHE.pop(k, None)  # not del: another request thread may have pruned it already
     _TOKEN_CACHE[token] = min(now + _TOKEN_CACHE_TTL, float(info.get("exp", now + _TOKEN_CACHE_TTL)))
     return True
 
@@ -1095,81 +1084,43 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
         if method == "POST" and path == "/mcp":
             resp = handle_mcp_message(payload)
             return (202, {}) if resp is None else (200, resp)
+        if not isinstance(payload, dict):
+            return 400, {"error": "Body must be a JSON object"}
 
+        # REST routes map onto the MCP tools, so both share one argument handling
+        flag = lambda k: query.get(k, ["false"])[0].lower() in ("1", "true", "yes")  # noqa: E731
         if path == "/api/lobes":
             if method == "GET":
-                return 200, {"lobes": list_lobes()}
+                return 200, call_mcp_tool("lobe_list", {})
             if method == "POST":
-                return 201, create_lobe(
-                    name=payload["name"],
-                    purpose=payload["purpose"],
-                    remote_url=payload.get("remote_url"),
-                    autopush=None if payload.get("autopush") is None else bool(payload["autopush"]),
-                    generate_skills=bool(payload.get("generate_skills", False)),
-                    skill_mode=str(payload.get("skill_mode", "mcp")),
-                )
+                return 201, call_mcp_tool("lobe_create", payload)
 
         parts = [unquote(p) for p in path.strip("/").split("/")]
         # /api/lobes/{lobe}/...
         if len(parts) >= 4 and parts[0] == "api" and parts[1] == "lobes":
-            lobe = parts[2]
-            sub = parts[3]
-
-            if sub == "skills" and method == "GET" and len(parts) == 4:
-                mode = query.get("mode", ["mcp"])[0]
-                return 200, generate_lobe_skills(lobe, mode=mode)
-            if sub == "remote" and method == "PUT" and len(parts) == 4:
-                return 200, configure_remote(
-                    lobe=lobe,
-                    remote_url=payload.get("remote_url"),
-                    autopush=None if (v := payload.get("autopush", True)) is None else bool(v),
-                )
-            if sub == "sync" and method == "POST" and len(parts) == 4:
-                return 200, sync_lobe(
-                    lobe=lobe,
-                    push=bool(payload.get("push", True)),
-                )
-            if sub == "search" and method == "GET" and len(parts) == 4:
-                terms = query.get("q", [])
-                if not terms:
-                    return 400, {"error": "Missing query parameter 'q'"}
-                no_decay = query.get("no_decay", ["false"])[0].lower() in ("1", "true", "yes")
-                cmd = ["search", *(["--no-decay"] if no_decay else []), *terms]
-                return 200, run_wiki_tool(lobe, *cmd)
-            if sub == "sections" and method == "GET" and len(parts) == 4:
-                return 200, run_wiki_tool(lobe, "sections")
-            if sub == "pending" and method == "GET" and len(parts) == 4:
-                return 200, run_wiki_tool(lobe, "pending")
-            if sub == "lint" and method == "GET" and len(parts) == 4:
-                strict = query.get("strict", ["false"])[0].lower() in ("1", "true", "yes")
-                cmd = ["lint", *(["--strict"] if strict else [])]
-                return 200, run_wiki_tool(lobe, *cmd)
-            if sub == "links" and method == "GET" and len(parts) == 5:
-                return 200, run_wiki_tool(lobe, "links", parts[4])
-            if sub == "raw" and method == "POST" and len(parts) == 4:
-                return 201, add_raw(lobe, payload["filename"], payload["content"])
-            if sub == "raw" and method == "GET" and len(parts) >= 5:
-                return 200, read_raw(lobe, "/".join(parts[4:]))
-            if sub == "pages" and len(parts) == 5:
-                slug = parts[4]
-                if method == "GET":
-                    line = lambda k: int(query[k][0]) if k in query else None  # noqa: E731
-                    return 200, read_page(lobe, slug, query.get("section", [None])[0], line("start_line"), line("end_line"))
-                if method == "PUT":
-                    return 200, write_page(
-                        lobe=lobe,
-                        slug=slug,
-                        content=payload["content"],
-                        section=payload.get("section"),
-                        description=payload.get("description"),
-                        log_entry=payload.get("log_entry"),
-                        expected_sha=payload.get("expected_sha"),
-                    )
-                if method == "PATCH":
-                    return 200, edit_page(
-                        lobe, slug, payload["edits"], payload.get("expected_sha"), payload.get("log_entry"),
-                        payload.get("index_section"), payload.get("index_description"),
-                    )
+            lobe, sub, n = parts[2], parts[3], len(parts)
+            route = {
+                ("GET", "skills", 4): ("lobe_generate_skills", {"mode": query.get("mode", ["mcp"])[0]}),
+                ("PUT", "remote", 4): ("lobe_configure_remote", payload),
+                ("POST", "sync", 4): ("lobe_sync", payload),
+                ("GET", "search", 4): ("lobe_search", {"terms": query.get("q", []), "no_decay": flag("no_decay")}),
+                ("GET", "sections", 4): ("lobe_sections", {}),
+                ("GET", "pending", 4): ("lobe_pending", {}),
+                ("GET", "lint", 4): ("lobe_lint", {"strict": flag("strict")}),
+                ("GET", "links", 5): ("lobe_links", {"page": parts[-1]}),
+                ("POST", "raw", 4): ("lobe_add_raw", payload),
+                ("GET", "pages", 5): ("lobe_read_page", {
+                    "slug": parts[-1], "section": query.get("section", [None])[0],
+                    **{k: int(query[k][0]) for k in ("start_line", "end_line") if k in query}}),
+                ("PUT", "pages", 5): ("lobe_write_page", {**payload, "slug": parts[-1]}),
+                ("PATCH", "pages", 5): ("lobe_edit_page", {**payload, "slug": parts[-1]}),
+            }.get((method, sub, n))
+            if sub == "raw" and method == "GET" and n >= 5:
+                route = ("lobe_read_raw", {"filename": "/".join(parts[4:])})
+            if route:
+                tool, args = route
+                status = 201 if tool == "lobe_add_raw" else 200
+                return status, call_mcp_tool(tool, {**args, "lobe": lobe})
 
         return 404, {"error": f"Not found: {method} {path}"}
     except KeyError as exc:
@@ -1184,11 +1135,22 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
         return 500, {"error": f"{type(exc).__name__}: {exc}"}
 
 
+MAX_BODY = 10 * 1024 * 1024  # far above any wiki page or raw source an agent sends
+
+
 class LobeHTTPHandler(BaseHTTPRequestHandler):
     def _handle(self, method: str) -> None:
-        length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length) if length > 0 else b""
-        status, data = dispatch_http(method, self.path, body, self.headers.get("Authorization"))
+        try:
+            length = int(self.headers.get("Content-Length") or "0")
+        except ValueError:
+            length = -1
+        if not 0 <= length <= MAX_BODY:
+            # checked before the read: anyone can send a body, even without a token
+            self.close_connection = True  # the unread body must not be parsed as the next request
+            status, data = (413, {"error": f"Body over {MAX_BODY} bytes"}) if length > 0 else (400, {"error": "Invalid Content-Length"})
+        else:
+            body = self.rfile.read(length) if length else b""
+            status, data = dispatch_http(method, self.path, body, self.headers.get("Authorization"))
         out = json.dumps(data).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -1224,8 +1186,10 @@ def run_stdio() -> None:
         line = line.strip()
         if not line:
             continue
-        msg = json.loads(line)
-        resp = handle_mcp_message(msg)
+        try:
+            resp = handle_mcp_message(json.loads(line))
+        except ValueError:  # one bad line must not end the session for every later request
+            resp = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error: invalid JSON"}}
         if resp is not None:
             sys.stdout.write(json.dumps(resp) + "\n")
             sys.stdout.flush()

@@ -94,14 +94,19 @@ def render(text: str, **values: str) -> str:
     return text
 
 
+def template_values(name: str, purpose: str, wiki_dir: str, raw_dir: str, external: bool, origin: str) -> dict[str, str]:
+    """The {{PLACEHOLDER}} values shared by every template forge renders."""
+    return dict(NAME=name, PURPOSE=purpose, WIKI=wiki_dir, RAW=raw_dir, ORIGIN=origin,
+                REPO_LINK="repo" if external else ".",
+                COMMIT_RULE=COMMIT_EXTERNAL if external else COMMIT_IN_PLACE)
+
+
 def render_skills(name: str, purpose: str, wiki_dir: str = "wiki", raw_dir: str = "raw",
                   mode: str = "local", external: bool = False, origin: str = "new") -> dict[str, str]:
     """Render the four <name>-{add-raw,ingest,ask,lint}/SKILL.md files in 'local' or 'mcp' mode."""
     if mode not in ("local", "mcp"):
         raise ValueError(f"Unsupported skill mode: {mode!r} (expected 'local' or 'mcp')")
-    values = dict(NAME=name, PURPOSE=purpose, WIKI=wiki_dir, RAW=raw_dir, ORIGIN=origin,
-                  REPO_LINK="repo" if external else ".",
-                  COMMIT_RULE=COMMIT_EXTERNAL if external else COMMIT_IN_PLACE)
+    values = template_values(name, purpose, wiki_dir, raw_dir, external, origin)
     tpl_root = TEMPLATES / ("mcp-skills" if mode == "mcp" else "skills")
     return {
         f"{name}-{kind}/SKILL.md": render((tpl_root / kind / "SKILL.md").read_text(), **values)
@@ -112,9 +117,7 @@ def render_skills(name: str, purpose: str, wiki_dir: str = "wiki", raw_dir: str 
 def generated_files(name: str, purpose: str, wiki_dir: str, raw_dir: str, external: bool,
                     origin: str) -> dict[str, tuple[str, int | None]]:
     """Every file forge renders into a lobe home: relative path -> (text, mode)."""
-    values = dict(NAME=name, PURPOSE=purpose, WIKI=wiki_dir, RAW=raw_dir, ORIGIN=origin,
-                  REPO_LINK="repo" if external else ".",
-                  COMMIT_RULE=COMMIT_EXTERNAL if external else COMMIT_IN_PLACE)
+    values = template_values(name, purpose, wiki_dir, raw_dir, external, origin)
     files = {
         "wiki_tool.py": ((TEMPLATES / "wiki_tool.py").read_text(), 0o755),
         "wikictl": (render((TEMPLATES / "wikictl").read_text(), **values), 0o755),

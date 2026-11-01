@@ -616,6 +616,8 @@ def test_part2_http_rest_and_mcp_e2e() -> None:
             stdio_input = "\n".join([
                 json.dumps({"jsonrpc": "2.0", "id": 10, "method": "initialize"}),
                 json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+                "{not json",  # bad lines get an error reply and the session goes on
+                "[1, 2]",
                 json.dumps({
                     "jsonrpc": "2.0",
                     "id": 11,
@@ -632,9 +634,10 @@ def test_part2_http_rest_and_mcp_e2e() -> None:
                 check=True,
             )
             lines = [json.loads(line) for line in proc.stdout.strip().splitlines()]
-            assert len(lines) == 2
+            assert len(lines) == 4, lines
             assert lines[0]["id"] == 10 and lines[0]["result"]["serverInfo"]["name"] == "lobe-server"
-            assert lines[1]["id"] == 11 and len(lines[1]["result"]["structuredContent"]["lobes"]) == 3
+            assert [l["error"]["code"] for l in lines[1:3]] == [-32700, -32600]
+            assert lines[3]["id"] == 11 and len(lines[3]["result"]["structuredContent"]["lobes"]) == 3
         finally:
             srv.shutdown()
             srv.server_close()
@@ -994,6 +997,60 @@ Old note.
             t.join()
         assert not errors, errors
         assert app.git(page_file.parents[1], "rev-list", "--count", f"{after}..HEAD").stdout.strip() == "8"
+
+        # A dot in a page name is part of the name: k8s-1.29-upgrade must not open k8s-1
+        wiki = page_file.parent
+        (wiki / "k8s-1.md").write_text("short\n")
+        (wiki / "k8s-1.29-upgrade.md").write_text(SAMPLE_PAGE.replace("Configured", "Use git push --force. Configured"))
+        for slug in ("k8s-1.29-upgrade", "k8s-1.29-upgrade.md", "wiki/k8s-1.29-upgrade.md"):
+            got = app.read_page("edits", slug)
+            assert got["slug"] == "k8s-1.29-upgrade" and "--force" in got["content"], (slug, got["slug"])
+        try:
+            app.write_page("edits", "k8s-1.v2", "clobber")
+            raise AssertionError("write_page accepted a dotted slug")
+        except ValueError:
+            pass
+        assert (wiki / "k8s-1.md").read_text() == "short\n"
+
+        # Terms and page names starting with "-" are searched for, not parsed as wikictl options
+        res = app.call_mcp_tool("lobe_search", {"lobe": "edits", "terms": ["--force"]})
+        assert res["returncode"] == 0 and "k8s-1.29-upgrade" in res["stdout"], res
+        status, body = app.dispatch_http("GET", "/api/lobes/edits/search?q=--force", b"")
+        assert status == 200 and "k8s-1.29-upgrade" in body["stdout"], body
+        assert app.call_mcp_tool("lobe_links", {"lobe": "edits", "page": "-x"})["returncode"] == 1  # not found, not a usage error (2)
+
+        # raw/ is append-only: a second save under the same name is refused and the first stays
+        raw_dir = Path(tmp) / "lobes" / "edits" / "raw"
+        status, body = app.dispatch_http("POST", "/api/lobes/edits/raw", json.dumps({"filename": "2026-11-01-n0.md", "content": "other\n"}).encode())
+        assert status == 409 and "already exists" in body["error"], (status, body)
+        status, _ = app.dispatch_http("POST", "/api/lobes/edits/raw", json.dumps({"filename": "deep/2026-11-01-n0.md", "content": "x\n"}).encode())
+        assert status == 409 and (raw_dir / "2026-11-01-n0.md").read_text() == "note 0\n"
+        assert app.dispatch_http("POST", "/api/lobes/edits/raw", b"[1, 2]")[0] == 400  # not a JSON object
+        status, body = app.dispatch_http("POST", "/mcp", b"[1, 2]")
+        assert status == 200 and body["error"]["code"] == -32600, (status, body)
+
+        # REST routes go through the MCP tools: same purpose, same skills, same errors
+        assert app.dispatch_http("GET", "/api/lobes", b"")[1]["lobes"][0]["purpose"] == "Docs layout"
+        rest = app.dispatch_http("GET", "/api/lobes/edits/skills", b"")[1]
+        assert rest == app.call_mcp_tool("lobe_generate_skills", {"lobe": "edits"}) and rest["purpose"] == "Edit tests"
+        assert app.dispatch_http("GET", "/api/lobes/edits/search", b"")[0] == 400
+        assert app.dispatch_http("GET", "/api/lobes/nope/sections", b"")[0] == 404
+
+    # Oversized or malformed bodies are refused before they are read, even without a token
+    import http.client
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), app.LobeHTTPHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        for length, want in ((str(app.MAX_BODY + 1), 413), ("4000000000", 413), ("abc", 400), ("-5", 400)):
+            conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+            conn.putrequest("POST", "/mcp")
+            conn.putheader("Content-Length", length)
+            conn.endheaders()  # no body sent: a server that tried to read it would time out here
+            assert conn.getresponse().status == want, length
+            conn.close()
+    finally:
+        srv.shutdown()
+        srv.server_close()
 
 
 if __name__ == "__main__":

@@ -50,6 +50,7 @@ Call the **`lobe_add_raw`** MCP tool on `lobe-server`:
 ```
 
 `lobe-server` writes `{{RAW}}/<filename>`, commits it to Git locally, and pushes to `origin` if auto-push is enabled.
+If it answers that the file already exists, ask the user before choosing another name. Never retry with the same name.
 
 ## Output
 

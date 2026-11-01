@@ -22,8 +22,7 @@ COPY server/app.py /app/server/app.py
 
 ENV LOBES_DIR=/data/lobes \
     LOBE_HOST=0.0.0.0 \
-    LOBE_PORT=8080 \
-    LOBE_SERVER_VERSION="${VERSION}"
+    LOBE_PORT=8080
 
 VOLUME ["/data/lobes"]
 EXPOSE 8080

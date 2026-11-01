@@ -309,6 +309,7 @@ def cmd_lint(args) -> int:
     # In strict mode only G-data-errors, C, and H are hard errors that block commits.
     # G-legacy (missing frontmatter), B, D, and I are soft warnings.
     strict = getattr(args, "strict", False)
+    limit = None if getattr(args, "all", False) else max(1, getattr(args, "limit", 20))
 
     total = sum(len(v) for v in issues.values()) + len(legacy_pages)
     hard  = len(issues["C"]) + len(issues["G"]) + len(issues["H"])
@@ -339,14 +340,12 @@ def cmd_lint(args) -> int:
                     print(f"    (run with --show-legacy to list all {leg_count})")
                 print("    (convert: convert-legacy to preview, convert-legacy --apply to write)")
                 print("    (H is not checked on legacy pages: convert them first)")
-            for page, msg in items:
-                print(f"  {n}. {page} — {msg}")
-                n += 1
+            n = _print_issues(items, n, limit)
         elif items:
             print(f"\n{check}. {labels[check]} ({len(items)}){soft_tag}")
-            for page, msg in items:
-                print(f"  {n}. {page} — {msg}")
-                n += 1
+            if check == "H" and limit is not None and len(items) > limit:
+                _summarize_missing_sources(items)
+            n = _print_issues(items, n, limit)
 
     if strict:
         if hard == 0:
@@ -358,6 +357,34 @@ def cmd_lint(args) -> int:
 
     print(f"\nTotal: {total} issue(s)")
     return 1
+
+
+def _print_issues(items: list[tuple[str, str]], n: int, limit: int | None) -> int:
+    """Print up to `limit` numbered issues (all when None); return the next number."""
+    shown = items if limit is None else items[:limit]
+    for page, msg in shown:
+        print(f"  {n}. {page} — {msg}")
+        n += 1
+    if len(shown) < len(items):
+        print(f"  … and {len(items) - len(shown)} more (lint --all lists every issue)")
+    return n
+
+
+def _summarize_missing_sources(items: list[tuple[str, str]]) -> None:
+    """One line per folder, so a systematic gap (e.g. a gitignored raw/) shows as its cause, not 800 lines."""
+    srcs = {m.group(1) for _, msg in items if (m := re.match(r"source '(.+)' not found", msg))}
+    by_dir: dict[str, int] = {}
+    for src in srcs:
+        parts = Path(src).parts
+        d = str(Path(*parts[:2])) if len(parts) > 2 else str(Path(src).parent)
+        by_dir[d] = by_dir.get(d, 0) + 1
+    print(f"  {len(srcs)} distinct file(s) cited by {len({pg for pg, _ in items})} page(s), by folder:")
+    for d, c in sorted(by_dir.items(), key=lambda kv: (-kv[1], kv[0]))[:10]:
+        print(f"    {d}/ — {c} file(s){'' if (REPO / d).is_dir() else '  (folder missing)'}")
+    if len(by_dir) > 10:
+        print(f"    … and {len(by_dir) - 10} more folder(s)")
+    if not RAW.is_dir() or not any(not f.name.startswith(".") for f in RAW.iterdir()):  # .gitkeep alone is empty
+        print(f"  {RAW.name}/ is missing or empty: restore the sources (is {RAW.name}/ gitignored?)")
 
 
 # ── search / links / sections / index-add ─────────────────────────────────────
@@ -791,6 +818,8 @@ def main():
         "--strict", action="store_true",
         help="Exit 1 only for hard errors (C, G-data, H); treat legacy/orphan/index as warnings",
     )
+    lint_p.add_argument("--limit", type=int, default=20, help="Issues listed per check (default 20)")
+    lint_p.add_argument("--all", action="store_true", help="List every issue (no per-check limit)")
 
     search_p = sub.add_parser("search", help="Rank pages for one or more terms (BM25F + recency, regex, case-insensitive)")
     search_p.add_argument("terms", nargs="+", help="One term per concept; aliases as alternation, e.g. 'eks|kubernetes'")

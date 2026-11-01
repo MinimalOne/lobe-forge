@@ -939,6 +939,46 @@ Old note.
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
+        # Nested raw sources: every path lobe_pending prints can be read; nothing outside the raw folder can
+        lobes = Path(tmp) / "lobes"
+        (lobes / "edits" / "raw" / "sub").mkdir(parents=True, exist_ok=True)
+        (lobes / "edits" / "raw" / "sub" / "n.md").write_text("nested\n")
+        assert "raw/sub/n.md" in app.run_wiki_tool("edits", "pending")["stdout"]
+        for name in ("raw/sub/n.md", "sub/n.md"):
+            got = app.read_raw("edits", name)
+            assert got["content"] == "nested\n" and got["filename"] == "sub/n.md" and got["path"] == "raw/sub/n.md", got
+        assert app.dispatch_http("GET", "/api/lobes/edits/raw/raw/sub/n.md", b"")[1]["content"] == "nested\n"
+        (lobes / "outside.md").write_text("secret\n")
+        (lobes / "edits" / "raw" / "link.md").symlink_to(lobes / "outside.md")
+        for bad in ("../LOBE.md", "raw/../../outside.md", str(lobes / "outside.md"), "", "raw", "link.md"):
+            try:
+                app.read_raw("edits", bad)
+                raise AssertionError(f"read_raw accepted {bad!r}")
+            except ValueError:
+                pass
+        assert app.dispatch_http("GET", "/api/lobes/edits/raw/..%2F..%2Foutside.md", b"")[0] == 400
+        (lobes / "edits" / "raw" / "link.md").unlink()
+        (lobes / "outside.md").unlink()
+        # an adopted llmwiki/docs layout: lobe_pending prints docs/..., which read_raw takes as is
+        subprocess.run([sys.executable, str(app.FORGE_SCRIPT), "create", "--name", "adopted", "--purpose", "Docs layout",
+                        "--repo", str(lobes / "adopted"), "--wiki-dir", "llmwiki", "--raw-dir", "docs"], check=True, capture_output=True)
+        (lobes / "adopted" / "docs" / "team").mkdir(parents=True)
+        (lobes / "adopted" / "docs" / "team" / "runbook.md").write_text("runbook\n")
+        assert "docs/team/runbook.md" in app.run_wiki_tool("adopted", "pending")["stdout"]
+        assert app.read_raw("adopted", "docs/team/runbook.md")["content"] == "runbook\n"
+
+        # One lobe-name rule (forge's): rejected before anything touches the disk, as a 400
+        for bad_name in ("2fa", "a" * 31):
+            code, body = app.dispatch_http("POST", "/api/lobes", json.dumps({"name": bad_name, "purpose": "x"}).encode())
+            assert code == 400 and "Invalid lobe name" in body["error"], (code, body)
+            assert not (lobes / bad_name).exists()
+        assert app.resolve_lobe("adopted") == (lobes / "adopted").resolve()
+
+        # Stalled network git fails instead of holding the write lock forever
+        _, env = app.git_auth_args_and_env("https://github.com/u/r.git")
+        assert env["GIT_HTTP_LOW_SPEED_LIMIT"] == "1" and env["GIT_HTTP_LOW_SPEED_TIME"] == "30"
+        assert "ConnectTimeout=10" in env["GIT_SSH_COMMAND"]
+
         # Saving unchanged content while an unrelated file is untracked commits nothing and does not fail
         stray = page_file.parents[1] / "raw" / "stray.md"
         stray.write_text("made by another tool\n")

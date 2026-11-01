@@ -322,7 +322,7 @@ paths:
       - name: filename
         in: path
         required: true
-        description: Filename inside the lobe's `raw/` directory
+        description: Filename inside the lobe's raw folder, or a path inside it such as `sub/notes.md` or `docs/sub/notes.md` as `lobe_pending` prints it
         schema:
           type: string
     get:
@@ -480,10 +480,10 @@ components:
       name: lobe
       in: path
       required: true
-      description: Lowercase hyphenated lobe name (e.g. `hack`, `personal`)
+      description: Lobe name (e.g. `hack`, `personal`) — lowercase letters, digits and hyphens, starting with a letter, at most 30 characters
       schema:
         type: string
-        pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
+        pattern: "^[a-z][a-z0-9-]{0,29}$"
 
   responses:
     BadRequest:
@@ -566,7 +566,7 @@ components:
       properties:
         name:
           type: string
-          pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
+          pattern: "^[a-z][a-z0-9-]{0,29}$"
           example: personal
         purpose:
           type: string

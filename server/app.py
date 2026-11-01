@@ -9,15 +9,19 @@ from __future__ import annotations
 
 import argparse
 import base64
+import functools
+import hmac
 import json
 import os
 import re
 import subprocess
 import sys
+import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 FORGE_SCRIPT = ROOT / "scripts" / "forge.py"
@@ -759,13 +763,76 @@ def handle_mcp_message(msg: dict[str, Any]) -> dict[str, Any] | None:
 
 # ── Part 2: HTTP REST API & Streamable HTTP /mcp Handler ────────────────────
 
+def oauth_issuer() -> str:
+    """OIDC issuer of the provider (e.g. Authentik .../application/o/<slug>/). Empty disables OAuth."""
+    return os.environ.get("LOBE_OAUTH_ISSUER", "").strip()
+
+
+def protected_resource_metadata() -> dict[str, Any]:
+    """RFC 9728 metadata telling OAuth clients (claude.ai) which authorization server to use."""
+    public = os.environ.get("LOBE_PUBLIC_URL", "").strip().rstrip("/")
+    return {
+        "resource": f"{public}/mcp",
+        "authorization_servers": [oauth_issuer()],
+        "bearer_methods_supported": ["header"],
+    }
+
+
+@functools.lru_cache(maxsize=1)
+def introspection_endpoint(issuer: str) -> str:
+    url = issuer.rstrip("/") + "/.well-known/openid-configuration"
+    with urllib.request.urlopen(url, timeout=5) as resp:
+        return json.loads(resp.read())["introspection_endpoint"]
+
+
+# shortcut: in-memory cache per process, emptied on restart; fine for one lobe-server container.
+_TOKEN_CACHE: dict[str, float] = {}
+_TOKEN_CACHE_TTL = 60.0
+
+
+def introspect_token(token: str) -> bool:
+    """Validate an OAuth access token with the issuer's RFC 7662 introspection endpoint."""
+    now = time.time()
+    if _TOKEN_CACHE.get(token, 0) > now:
+        return True
+    client_id = os.environ.get("LOBE_OAUTH_CLIENT_ID", "").strip()
+    secret = os.environ.get("LOBE_OAUTH_CLIENT_SECRET", "").strip()
+    try:
+        req = urllib.request.Request(
+            introspection_endpoint(oauth_issuer()),
+            data=urlencode({"token": token}).encode("utf-8"),
+            headers={
+                "Authorization": "Basic " + base64.b64encode(f"{client_id}:{secret}".encode()).decode(),
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            info = json.loads(resp.read())
+    except Exception:
+        return False  # fail closed when the authorization server is unreachable
+    if not info.get("active"):
+        return False
+    # Reject tokens issued to other applications on the same authorization server.
+    if info.get("client_id") and info["client_id"] != client_id:
+        return False
+    for k, v in list(_TOKEN_CACHE.items()):
+        if v <= now:
+            del _TOKEN_CACHE[k]
+    _TOKEN_CACHE[token] = min(now + _TOKEN_CACHE_TTL, float(info.get("exp", now + _TOKEN_CACHE_TTL)))
+    return True
+
+
 def check_auth(auth_header: str | None) -> bool:
     expected = os.environ.get("LOBE_API_TOKEN", "").strip()
-    if not expected:
+    if not expected and not oauth_issuer():
         return True
     if not auth_header or not auth_header.startswith("Bearer "):
         return False
-    return auth_header.removeprefix("Bearer ").strip() == expected
+    token = auth_header.removeprefix("Bearer ").strip()
+    if expected and hmac.compare_digest(token.encode(), expected.encode()):
+        return True
+    return bool(oauth_issuer()) and introspect_token(token)
 
 
 def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | None = None) -> tuple[int, Any]:
@@ -775,6 +842,9 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
 
     if method == "GET" and path == "/health":
         return 200, {"status": "ok"}
+
+    if method == "GET" and path.startswith("/.well-known/oauth-protected-resource") and oauth_issuer():
+        return 200, protected_resource_metadata()
 
     if not check_auth(auth_header):
         return 401, {"error": "Unauthorized"}
@@ -877,6 +947,12 @@ class LobeHTTPHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(out)))
+        if status == 401 and oauth_issuer():
+            public = os.environ.get("LOBE_PUBLIC_URL", "").strip().rstrip("/")
+            self.send_header(
+                "WWW-Authenticate",
+                f'Bearer resource_metadata="{public}/.well-known/oauth-protected-resource"',
+            )
         self.end_headers()
         self.wfile.write(out)
 

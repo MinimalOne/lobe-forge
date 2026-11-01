@@ -589,6 +589,88 @@ def test_part3_container_isolation_and_compose() -> None:
         assert resps[1]["result"]["structuredContent"]["returncode"] == 0
 
 
+def test_part4_oauth_resource_server() -> None:
+    from http.server import BaseHTTPRequestHandler
+    from urllib.parse import parse_qs
+
+    class FakeIdP(BaseHTTPRequestHandler):
+        def _send(self, data: dict[str, Any]) -> None:
+            out = json.dumps(data).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def do_GET(self) -> None:
+            self._send({"introspection_endpoint": f"{idp_url}/introspect/"})
+
+        def do_POST(self) -> None:
+            if self.headers.get("Authorization") != "Basic bG9iZTpzM2NyZXQ=":  # lobe:s3cret
+                self._send({"active": False})
+                return
+            body = self.rfile.read(int(self.headers["Content-Length"])).decode()
+            token = parse_qs(body)["token"][0]
+            self._send({
+                "good-token": {"active": True, "client_id": "lobe"},
+                "other-app-token": {"active": True, "client_id": "vaultwarden"},
+            }.get(token, {"active": False}))
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            pass
+
+    idp = ThreadingHTTPServer(("127.0.0.1", 0), FakeIdP)
+    idp_url = f"http://127.0.0.1:{idp.server_address[1]}"
+    threading.Thread(target=idp.serve_forever, daemon=True).start()
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), app.LobeHTTPHandler)
+    base_url = f"http://127.0.0.1:{srv.server_address[1]}"
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    env = {
+        "LOBE_OAUTH_ISSUER": f"{idp_url}/application/o/lobe/",
+        "LOBE_OAUTH_CLIENT_ID": "lobe",
+        "LOBE_OAUTH_CLIENT_SECRET": "s3cret",
+        "LOBE_PUBLIC_URL": "https://lobes.example.com",
+        "LOBE_API_TOKEN": "static-token",
+    }
+    os.environ.update(env)
+    app.introspection_endpoint.cache_clear()
+    app._TOKEN_CACHE.clear()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["LOBES_DIR"] = tmp
+            code, meta = http_req(base_url, "GET", "/.well-known/oauth-protected-resource/mcp")
+            assert code == 200
+            assert meta["resource"] == "https://lobes.example.com/mcp"
+            assert meta["authorization_servers"] == [env["LOBE_OAUTH_ISSUER"]]
+
+            req = urllib.request.Request(f"{base_url}/mcp", data=b"{}", method="POST")
+            try:
+                urllib.request.urlopen(req)
+                raise AssertionError("expected 401")
+            except urllib.error.HTTPError as err:
+                assert err.code == 401
+                assert err.headers["WWW-Authenticate"] == (
+                    'Bearer resource_metadata="https://lobes.example.com/.well-known/oauth-protected-resource"'
+                )
+
+            assert http_req(base_url, "GET", "/api/lobes", token="good-token")[0] == 200
+            assert http_req(base_url, "GET", "/api/lobes", token="static-token")[0] == 200
+            assert http_req(base_url, "GET", "/api/lobes", token="other-app-token")[0] == 401
+            assert http_req(base_url, "GET", "/api/lobes", token="bogus")[0] == 401
+            assert "good-token" in app._TOKEN_CACHE and "bogus" not in app._TOKEN_CACHE
+
+            # OAuth alone (no static token) must still enforce auth.
+            os.environ.pop("LOBE_API_TOKEN")
+            assert http_req(base_url, "GET", "/api/lobes")[0] == 401
+            assert http_req(base_url, "GET", "/api/lobes", token="good-token")[0] == 200
+    finally:
+        srv.shutdown()
+        idp.shutdown()
+        for k in [*env, "LOBES_DIR"]:
+            os.environ.pop(k, None)
+
+
 if __name__ == "__main__":
     test_part1_core_and_git_scenarios()
     print("OK: Part 1 core & Git E2E scenarios passed")
@@ -596,3 +678,5 @@ if __name__ == "__main__":
     print("OK: Part 2 HTTP REST & MCP (HTTP + stdio) E2E scenarios passed")
     test_part3_container_isolation_and_compose()
     print("OK: Part 3 container isolation & compose verification passed")
+    test_part4_oauth_resource_server()
+    print("OK: Part 4 OAuth resource server passed")

@@ -13,6 +13,10 @@ services:
       - LOBE_API_TOKEN=${LOBE_API_TOKEN:-}
       - LOBE_GIT_PUSH=${LOBE_GIT_PUSH:-0}
       - LOBE_GIT_TOKEN=${LOBE_GIT_TOKEN:-}
+      - LOBE_OAUTH_ISSUER=${LOBE_OAUTH_ISSUER:-}
+      - LOBE_OAUTH_CLIENT_ID=${LOBE_OAUTH_CLIENT_ID:-}
+      - LOBE_OAUTH_CLIENT_SECRET=${LOBE_OAUTH_CLIENT_SECRET:-}
+      - LOBE_PUBLIC_URL=${LOBE_PUBLIC_URL:-}
     volumes:
       - lobes_data:/data/lobes
 

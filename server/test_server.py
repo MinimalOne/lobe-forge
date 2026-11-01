@@ -995,6 +995,43 @@ Old note.
         assert not errors, errors
         assert app.git(page_file.parents[1], "rev-list", "--count", f"{after}..HEAD").stdout.strip() == "8"
 
+        # A dot in a page name is part of the name: k8s-1.29-upgrade must not open k8s-1
+        wiki = page_file.parent
+        (wiki / "k8s-1.md").write_text("short\n")
+        (wiki / "k8s-1.29-upgrade.md").write_text(SAMPLE_PAGE.replace("Configured", "Use git push --force. Configured"))
+        for slug in ("k8s-1.29-upgrade", "k8s-1.29-upgrade.md", "wiki/k8s-1.29-upgrade.md"):
+            got = app.read_page("edits", slug)
+            assert got["slug"] == "k8s-1.29-upgrade" and "--force" in got["content"], (slug, got["slug"])
+        try:
+            app.write_page("edits", "k8s-1.v2", "clobber")
+            raise AssertionError("write_page accepted a dotted slug")
+        except ValueError:
+            pass
+        assert (wiki / "k8s-1.md").read_text() == "short\n"
+
+        # Terms and page names starting with "-" are searched for, not parsed as wikictl options
+        res = app.call_mcp_tool("lobe_search", {"lobe": "edits", "terms": ["--force"]})
+        assert res["returncode"] == 0 and "k8s-1.29-upgrade" in res["stdout"], res
+        status, body = app.dispatch_http("GET", "/api/lobes/edits/search?q=--force", b"")
+        assert status == 200 and "k8s-1.29-upgrade" in body["stdout"], body
+        assert app.call_mcp_tool("lobe_links", {"lobe": "edits", "page": "-x"})["returncode"] == 1  # not found, not a usage error (2)
+
+    # Oversized or malformed bodies are refused before they are read, even without a token
+    import http.client
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), app.LobeHTTPHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        for length, want in ((str(app.MAX_BODY + 1), 413), ("4000000000", 413), ("abc", 400), ("-5", 400)):
+            conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+            conn.putrequest("POST", "/mcp")
+            conn.putheader("Content-Length", length)
+            conn.endheaders()  # no body sent: a server that tried to read it would time out here
+            assert conn.getresponse().status == want, length
+            conn.close()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
 
 if __name__ == "__main__":
     test_part1_core_and_git_scenarios()

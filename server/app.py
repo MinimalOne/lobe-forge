@@ -466,6 +466,11 @@ def read_raw(lobe: str, filename: str) -> dict[str, Any]:
     }
 
 
+def page_name(slug: str) -> str:
+    """`wiki/k8s-1.29.md` -> `k8s-1.29`: not Path.stem, which would cut at the last dot and open another page."""
+    return Path(slug).name.removesuffix(".md")
+
+
 def page_sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
@@ -512,7 +517,7 @@ def read_page(
     start_line: int | None = None,
     end_line: int | None = None,
 ) -> dict[str, Any]:
-    clean_slug = Path(slug).stem
+    clean_slug = page_name(slug)
     paths = l_paths(lobe)
     page_file = paths["WIKI"] / f"{clean_slug}.md"
     if not page_file.exists():
@@ -552,7 +557,7 @@ def write_page(
     log_entry: str | None = None,
     expected_sha: str | None = None,
 ) -> dict[str, Any]:
-    clean_slug = Path(slug).stem
+    clean_slug = page_name(slug)
     if not SLUG_RE.match(clean_slug):
         raise ValueError(f"Invalid page slug: {slug!r} (expected lowercase letters, digits, hyphens)")
     paths = l_paths(lobe)
@@ -908,10 +913,10 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
         terms = [t for t in args.get("terms", []) if t]
         if not terms:
             raise ValueError("terms must be a non-empty list of search strings")
-        cmd = ["search", *(["--no-decay"] if args.get("no_decay") else []), *terms]
+        cmd = ["search", *(["--no-decay"] if args.get("no_decay") else []), "--", *terms]
         return run_wiki_tool(args["lobe"], *cmd)
     if name == "lobe_links":
-        return run_wiki_tool(args["lobe"], "links", args["page"])
+        return run_wiki_tool(args["lobe"], "links", "--", args["page"])
     if name == "lobe_sections":
         return run_wiki_tool(args["lobe"], "sections")
     if name == "lobe_pending":
@@ -1134,7 +1139,7 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
                 if not terms:
                     return 400, {"error": "Missing query parameter 'q'"}
                 no_decay = query.get("no_decay", ["false"])[0].lower() in ("1", "true", "yes")
-                cmd = ["search", *(["--no-decay"] if no_decay else []), *terms]
+                cmd = ["search", *(["--no-decay"] if no_decay else []), "--", *terms]
                 return 200, run_wiki_tool(lobe, *cmd)
             if sub == "sections" and method == "GET" and len(parts) == 4:
                 return 200, run_wiki_tool(lobe, "sections")
@@ -1145,7 +1150,7 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
                 cmd = ["lint", *(["--strict"] if strict else [])]
                 return 200, run_wiki_tool(lobe, *cmd)
             if sub == "links" and method == "GET" and len(parts) == 5:
-                return 200, run_wiki_tool(lobe, "links", parts[4])
+                return 200, run_wiki_tool(lobe, "links", "--", parts[4])
             if sub == "raw" and method == "POST" and len(parts) == 4:
                 return 201, add_raw(lobe, payload["filename"], payload["content"])
             if sub == "raw" and method == "GET" and len(parts) >= 5:
@@ -1184,11 +1189,22 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
         return 500, {"error": f"{type(exc).__name__}: {exc}"}
 
 
+MAX_BODY = 10 * 1024 * 1024  # far above any wiki page or raw source an agent sends
+
+
 class LobeHTTPHandler(BaseHTTPRequestHandler):
     def _handle(self, method: str) -> None:
-        length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length) if length > 0 else b""
-        status, data = dispatch_http(method, self.path, body, self.headers.get("Authorization"))
+        try:
+            length = int(self.headers.get("Content-Length") or "0")
+        except ValueError:
+            length = -1
+        if not 0 <= length <= MAX_BODY:
+            # checked before the read: anyone can send a body, even without a token
+            self.close_connection = True  # the unread body must not be parsed as the next request
+            status, data = (413, {"error": f"Body over {MAX_BODY} bytes"}) if length > 0 else (400, {"error": "Invalid Content-Length"})
+        else:
+            body = self.rfile.read(length) if length else b""
+            status, data = dispatch_http(method, self.path, body, self.headers.get("Authorization"))
         out = json.dumps(data).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")

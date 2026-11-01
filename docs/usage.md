@@ -150,7 +150,11 @@ Configure `lobe-server` with the following environment variables:
 | `LOBES_DIR` | `/data/lobes` | Directory path that stores all lobe Git repositories. |
 | `LOBE_HOST` | `0.0.0.0` | Bind address for the HTTP server (can be overridden by `--host`). |
 | `LOBE_PORT` | `8080` | TCP port for the HTTP server (can be overridden by `--port`). |
-| `LOBE_API_TOKEN` | *(unset)* | Bearer token for `/api/*` and `/mcp` HTTP requests. If unset, authentication is disabled. `/health` is always public. |
+| `LOBE_API_TOKEN` | *(unset)* | Bearer token for `/api/*` and `/mcp` HTTP requests. If unset and `LOBE_OAUTH_ISSUER` is also unset, authentication is disabled. `/health` is always public. |
+| `LOBE_OAUTH_ISSUER` | *(unset)* | OIDC issuer URL of the OAuth provider, for example `https://auth.example.com/application/o/lobe-server/`. Set it to accept OAuth access tokens (for claude.ai and the Claude mobile app). `LOBE_API_TOKEN` continues to work. |
+| `LOBE_OAUTH_CLIENT_ID` | *(unset)* | OAuth client ID. lobe-server uses it to call the token introspection endpoint and accepts only tokens issued to this client. |
+| `LOBE_OAUTH_CLIENT_SECRET` | *(unset)* | OAuth client secret for the token introspection call. |
+| `LOBE_PUBLIC_URL` | *(unset)* | Public base URL of lobe-server, for example `https://lobes.example.com`. Used in `/.well-known/oauth-protected-resource` and in the `WWW-Authenticate` header. |
 | `LOBE_GIT_PUSH` | `0` | Global auto-push fallback (`1`, `true`, or `yes`). Used when a lobe does not set `git config lobe.autopush`. |
 | `LOBE_GIT_TOKEN` | *(unset)* | Personal access token (PAT) or `username:token` credential for HTTPS Git operations (`clone`, `fetch`, `pull --rebase`, `push`, `ls-remote`). |
 | `LOBE_SERVER_VERSION` | *(from `plugin.json`)* | Overrides the semantic version string reported by MCP `initialize`. |

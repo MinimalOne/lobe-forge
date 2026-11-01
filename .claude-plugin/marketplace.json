@@ -7,9 +7,9 @@
     {
       "name": "lobe-forge",
       "source": "./",
-      "description": "Create git-backed LLM wikis (lobes) with their own named skills: <name>-add-raw, -ingest, -ask, -lint",
+      "description": "Second brain for your AI tools: Git-backed LLM wikis (lobes) that Claude Code, Codex, Gemini CLI, Antigravity and other MCP clients can read and write, locally or on a self-hosted lobe-server",
       "license": "MIT",
-      "keywords": ["llm-wiki", "second-brain", "knowledge-base", "skills", "generator"],
+      "keywords": ["llm-wiki", "second-brain", "knowledge-base", "mcp", "self-hosted", "skills"],
       "category": "knowledge"
     }
   ]

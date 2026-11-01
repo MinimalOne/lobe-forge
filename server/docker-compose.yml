@@ -7,7 +7,7 @@ services:
     container_name: lobe-server
     restart: unless-stopped
     ports:
-      - "${LOBE_PORT:-8080}:8080"
+      - "127.0.0.1:${LOBE_PORT:-8080}:8080"   # put a TLS reverse proxy in front for remote access
     environment:
       - LOBES_DIR=/data/lobes
       - LOBE_API_TOKEN=${LOBE_API_TOKEN:-}
@@ -28,7 +28,7 @@ services:
     profiles: ["webui"]
     restart: unless-stopped
     ports:
-      - "${SILVERBULLET_PORT:-3001}:3000"
+      - "127.0.0.1:${SILVERBULLET_PORT:-3001}:3000"
     volumes:
       - lobes_data:/space
 
@@ -40,7 +40,7 @@ services:
     profiles: ["forgejo"]
     restart: unless-stopped
     ports:
-      - "${FORGEJO_PORT:-3002}:3000"
+      - "127.0.0.1:${FORGEJO_PORT:-3002}:3000"
     environment:
       - USER_UID=1000
       - USER_GID=1000

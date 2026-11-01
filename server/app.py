@@ -78,7 +78,10 @@ def git_auth_args_and_env(remote_url: str | None = None) -> tuple[list[str], dic
     }
     extra_args: list[str] = []
     token = os.environ.get("LOBE_GIT_TOKEN", "").strip()
-    if token:
+    url = urlparse(remote_url or "")
+    # Only the configured host gets the token: a caller-chosen remote_url must not receive it.
+    token_host = os.environ.get("LOBE_GIT_TOKEN_HOST", "github.com").strip().lower()
+    if token and url.scheme in ("http", "https") and url.hostname == token_host:
         if ":" in token:
             creds = token
         elif token.startswith("glpat-") or (remote_url and "gitlab" in remote_url.lower()):
@@ -88,7 +91,9 @@ def git_auth_args_and_env(remote_url: str | None = None) -> tuple[list[str], dic
         else:
             creds = f"x-access-token:{token}"
         basic = base64.b64encode(creds.encode("utf-8")).decode("ascii")
-        extra_args.extend(["-c", f"http.extraHeader=Authorization: Basic {basic}"])
+        # URL-scoped key: git sends the header only to requests for this host
+        scope = f"{url.scheme}://{url.netloc.rpartition('@')[2]}/"
+        extra_args.extend(["-c", f"http.{scope}.extraHeader=Authorization: Basic {basic}"])
     return extra_args, env
 
 
@@ -166,10 +171,10 @@ def git_commit_and_optional_push(repo: Path, message: str, paths: list[str] | No
     else:
         git(repo, "add", "-A")
 
-    status = git(repo, "status", "--porcelain")
     committed = False
     commit_hash = None
-    if status.stdout.strip():
+    # staged changes only: untracked or unstaged files elsewhere would make `git commit` fail
+    if git(repo, "diff", "--cached", "--quiet", check=False).returncode != 0:
         git(repo, "commit", "-q", "-m", message)
         committed = True
         commit_hash = git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
@@ -1139,6 +1144,8 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
         return 404, {"error": str(exc)}
     except RuntimeError as exc:
         return 409, {"error": str(exc)}
+    except Exception as exc:  # e.g. a failed git command: answer instead of dropping the connection
+        return 500, {"error": f"{type(exc).__name__}: {exc}"}
 
 
 class LobeHTTPHandler(BaseHTTPRequestHandler):
@@ -1198,6 +1205,10 @@ def main() -> None:
     if args.stdio:
         run_stdio()
     else:
+        no_auth = not os.environ.get("LOBE_API_TOKEN", "").strip() and not oauth_issuer()
+        if no_auth and args.host not in ("127.0.0.1", "localhost", "::1"):
+            sys.exit(f"lobe-server: refusing to listen on {args.host} without authentication; "
+                     "set LOBE_API_TOKEN or LOBE_OAUTH_ISSUER, or bind to 127.0.0.1")
         srv = ThreadingHTTPServer((args.host, args.port), LobeHTTPHandler)
         print(f"lobe-server listening on http://{args.host}:{args.port} (lobes={lobes_root()})", flush=True)
         srv.serve_forever()

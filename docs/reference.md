@@ -7,13 +7,14 @@
 | `LOBES_DIR` | `/data/lobes` | Folder that holds all lobe repositories. |
 | `LOBE_HOST` | `0.0.0.0` | HTTP bind address (`--host` overrides it). |
 | `LOBE_PORT` | `8080` | HTTP port (`--port` overrides it). |
-| `LOBE_API_TOKEN` | *(unset)* | Bearer token for `/api/*` and `/mcp`. If both this and `LOBE_OAUTH_ISSUER` are unset, authentication is off. `/health` is always public. |
+| `LOBE_API_TOKEN` | *(unset)* | Bearer token for `/api/*` and `/mcp`. If both this and `LOBE_OAUTH_ISSUER` are unset, authentication is off, and the HTTP server then only starts on a loopback address (`127.0.0.1`, `localhost`, `::1`). `/health` is always public. |
 | `LOBE_OAUTH_ISSUER` | *(unset)* | Issuer URL of your OAuth provider, for example `https://auth.example.com/application/o/lobe-server/`. Turns on OAuth for Claude.ai and the Claude mobile app. `LOBE_API_TOKEN` keeps working. |
 | `LOBE_OAUTH_CLIENT_ID` | *(unset)* | OAuth client ID. Used for token introspection; tokens issued to other clients are rejected. |
 | `LOBE_OAUTH_CLIENT_SECRET` | *(unset)* | OAuth client secret for token introspection. |
 | `LOBE_PUBLIC_URL` | *(unset)* | Public base URL, for example `https://lobes.example.com`. Used in `/.well-known/oauth-protected-resource` and the `WWW-Authenticate` header. |
 | `LOBE_GIT_PUSH` | `0` | Push every change (`1`, `true`, or `yes`) for lobes that don't set `lobe.autopush`. |
 | `LOBE_GIT_TOKEN` | *(unset)* | Token or `username:token` for HTTPS Git (`clone`, `fetch`, `pull`, `push`, `ls-remote`). See [server.md](server.md#3-push-to-a-git-remote-optional). |
+| `LOBE_GIT_TOKEN_HOST` | `github.com` | The only host `LOBE_GIT_TOKEN` is sent to, for example `codeberg.org` or `gitlab.com`. Remotes on any other host get no token. |
 | `LOBE_SERVER_VERSION` | *(from `plugin.json`)* | Overrides the version reported by MCP `initialize`. |
 
 ## MCP tools

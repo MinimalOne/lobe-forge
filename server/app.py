@@ -529,14 +529,14 @@ def write_page(
     page_file.write_text(content, encoding="utf-8")
 
     if log_entry and log_entry.strip():
-        # housekeeping only: a lobe on older tooling has no rotate-log, and that must not fail the write
-        if run_wiki_tool(lobe, "rotate-log")["returncode"] == 0 and (paths["WIKI"] / "log").is_dir():
-            staged.append(str((paths["WIKI"] / "log").relative_to(paths["REPO"])))
         log_file = paths["WIKI"] / "log.md"
         existing_log = log_file.read_text(encoding="utf-8") if log_file.exists() else f"# {lobe.title()} Wiki — Log\n"
         sep = "\n" if existing_log.endswith("\n") else "\n\n"
         log_file.write_text(existing_log + sep + log_entry.strip() + "\n", encoding="utf-8")
         staged.append(str(log_file.relative_to(paths["REPO"])))
+        # after the append, like the local ingest skill; housekeeping only: older tooling lacks rotate-log
+        if run_wiki_tool(lobe, "rotate-log")["returncode"] == 0 and (paths["WIKI"] / "log").is_dir():
+            staged.append(str((paths["WIKI"] / "log").relative_to(paths["REPO"])))
 
     action = "create" if is_new else "update"
     git_info = git_commit_and_optional_push(paths["REPO"], f"wiki: {action} {clean_slug}", staged)

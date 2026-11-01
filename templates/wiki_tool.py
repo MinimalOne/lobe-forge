@@ -305,7 +305,12 @@ def cmd_lint(args) -> int:
     for name in entries:
         lines = (WIKI / name).read_text().splitlines()
         if len(lines) > max_lines:
-            n_sec = len(_headings(lines))
+            fenced, n_sec = False, 0
+            for l in lines:
+                if l.lstrip().startswith("```"):
+                    fenced = not fenced
+                elif not fenced and l.startswith("## "):
+                    n_sec += 1
             issues["J"].append((name, f"{len(lines)} lines, {n_sec} ## section(s): split into a hub page plus sub-pages"))
     issues["J"].sort(key=lambda it: -int(it[1].split()[0]))
 
@@ -378,7 +383,7 @@ def cmd_lint(args) -> int:
 
 
 def _similar_pairs(entries: dict[str, dict], threshold: float) -> list[tuple[str, str, float, list[str]]]:
-    """Page pairs whose title, slug, aliases, summary and atoms share >= threshold of their words (Jaccard)."""
+    """Unlinked page pairs whose slug, title, aliases, summary and atoms share >= threshold of their words (Jaccard)."""
     names = sorted(n for n, e in entries.items() if e["has_frontmatter"])
     words: dict[str, set[str]] = {}
     for n in names:
@@ -409,6 +414,10 @@ def _similar_pairs(entries: dict[str, dict], threshold: float) -> list[tuple[str
                 shared[(a, b)] = shared.get((a, b), 0) + 1
     out = []
     for (a, b), c in shared.items():
+        if c < 3:  # one or two shared rare words (a port, a year) are a coincidence, not a duplicate
+            continue
+        if b[:-3] in entries[a]["wiki_links"] or a[:-3] in entries[b]["wiki_links"]:
+            continue  # linked pairs were already judged related: hub and sub-page, merged pointer, link and narrow
         score = c / (len(words[a]) + len(words[b]) - c)
         if score >= threshold:
             out.append((a, b, score, sorted(words[a] & words[b], key=lambda t: (df[t], t))[:5]))
@@ -750,8 +759,9 @@ def cmd_rotate_log(args) -> int:
         print(f"{WIKI.name}/log/{ym}.md: {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}")
     pointer = f"Older entries: `{WIKI.name}/log/<YYYY-MM>.md`, one file per month.\n"
     if pointer not in header:
-        header = header.rstrip("\n") + "\n\n" + pointer + "\n"
-    log.write_text(header + "".join(keep))
+        header = header.rstrip("\n") + "\n\n" + pointer
+    body = "".join(keep).strip("\n")
+    log.write_text(header.rstrip("\n") + ("\n\n" + body + "\n" if body else "\n"))
     return 0
 
 

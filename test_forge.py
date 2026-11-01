@@ -92,8 +92,23 @@ with tempfile.TemporaryDirectory() as d:
     assert f"kodi-skins.md — {len(pages['kodi-skins'].splitlines())} lines, 70 ## section(s): split into a hub page plus sub-pages" in r.stdout, r.stdout
     k = [l for l in r.stdout.splitlines() if "similar to" in l]
     assert len(k) == 1 and "vault-backup.md — similar to vaultwarden-backups.md" in k[0] and "60% shared words: 30, backup, data, day, nas" in k[0], r.stdout
-    assert "J." not in sh(f'"{repo}/wikictl" lint --max-lines 300').stdout
+    # a link between the pair resolves K; a fenced "## " line is not a section
+    (repo / "wiki" / "vault-backup.md").write_text(pages["vault-backup"] + "\nSee [[vaultwarden-backups]].\n")
+    assert "similar to" not in sh(f'"{repo}/wikictl" lint').stdout
+    (repo / "wiki" / "kodi-skins.md").write_text(pages["kodi-skins"] + "```\n## not a heading\n```\n")
+    assert ", 70 ## section(s)" in sh(f'"{repo}/wikictl" lint').stdout
+    assert "J." not in sh(f'"{repo}/wikictl" lint --max-lines 310').stdout
     assert "similar to" not in sh(f'"{repo}/wikictl" lint --dup-threshold 0.99').stdout
+    # one or two shared rare words never make a duplicate, even when every other word is common
+    rare = {f"router-home-{i}": fm.format(t="Router home", s="router network setup notes config device home", a="router", f="network")
+            for i in range(22)}
+    rare["router-setup"] = fm.format(t="Router", s="router network setup notes config device home 8443", a="router", f="network")
+    rare["home-device"] = fm.format(t="Home", s="router network setup notes config device home 8443", a="home", f="device")
+    for slug, text in rare.items():
+        (repo / "wiki" / f"{slug}.md").write_text(text)
+    assert "home-device.md — similar" not in sh(f'"{repo}/wikictl" lint --all').stdout
+    for slug in rare:
+        (repo / "wiki" / f"{slug}.md").unlink()
     for slug in pages:
         (repo / "wiki" / f"{slug}.md").unlink()
     git_idx = (repo / "wiki" / "index.md")
@@ -118,6 +133,10 @@ with tempfile.TemporaryDirectory() as d:
     sh(f'"{repo}/wikictl" rotate-log --month 2026-11')
     oct_log = (repo / "wiki" / "log" / "2026-10.md").read_text()
     assert oct_log.index("Ingest: b") < oct_log.index("Ingest: d") and log.read_text().count("Older entries") == 1
+    assert "\n\n\n" not in log.read_text() and "\n\n\n" not in oct_log
+    log.write_text("# L\n\n## 2026-10-02 — x\n\n- x\n")  # every entry moves: log.md keeps its header, one newline
+    sh(f'"{repo}/wikictl" rotate-log --month 2026-11')
+    assert log.read_text() == "# L\n\nOlder entries: `wiki/log/<YYYY-MM>.md`, one file per month.\n", repr(log.read_text())
     r = sh(f'"{repo}/wikictl" lint --strict && "{repo}/wikictl" search ingest')
     assert r.returncode in (0, 1) and "log/" not in r.stdout, r.stdout  # archives are not pages
     sh(f'rm -rf "{repo}/wiki/log"'); log.write_text(before)

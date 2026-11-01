@@ -48,7 +48,7 @@ W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" path
 | H | `sources:` file missing from `{{RAW}}/` |
 | I | Missing `atoms:` — existing page not yet migrated to include atoms in frontmatter |
 | J | Long page — over 200 lines; split into a hub page plus sub-pages |
-| K | Likely duplicate — two pages share half their title, alias, summary and atom words; merge, or link and narrow each |
+| K | Likely duplicate — two unlinked pages share half their title, alias, summary and atom words; merge, or link and narrow each |
 
 ## Step 2 — Reasoning checks on candidates
 
@@ -129,8 +129,8 @@ cite. Register new pages with `index-add`, and rerun `lint --strict`.
 
 **Likely duplicates (K)**: read both pages' frontmatter. If they cover the same thing, merge the
 smaller into the larger (union of sources and atoms), replace the smaller page's body with a
-one-line pointer, and fix links to it. If they only overlap, add `[[links]]` both ways and narrow
-each summary so they no longer read alike.
+one-line `[[pointer]]` to the larger, and fix links to it. If they only overlap, link them and
+narrow each summary. Lint stops flagging a pair once either page links the other.
 
 Then targeted `Edit`s only: recount `source_count`, move non-file sources to `provenance`, add
 missing index rows with `index-add`, add links to orphans from a related page. After fixing,

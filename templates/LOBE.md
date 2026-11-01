@@ -12,8 +12,9 @@ sources and asks questions; Claude maintains the wiki through the `{{NAME}}-*` s
 {{RAW}}/            source documents — append-only, never modified
 {{WIKI}}/           wiki pages, one concept or entity per page
 {{WIKI}}/index.md   table of contents, grouped by ## sections
-{{WIKI}}/log.md     append-only operation log
-wikictl         wrapper: wiki_tool.py for this lobe (search, links, sections, index-add, set-atoms, pending, lint, build, convert-legacy)
+{{WIKI}}/log.md     append-only operation log (this month)
+{{WIKI}}/log/       earlier months, one file each (wikictl rotate-log)
+wikictl         wrapper: wiki_tool.py for this lobe (search, links, sections, index-add, set-atoms, pending, lint, build, convert-legacy, rotate-log)
 skills/         the {{NAME}}-add-raw / -ingest / -ask / -lint skills (symlinked into Claude)
 ```
 

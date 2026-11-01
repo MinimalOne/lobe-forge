@@ -69,7 +69,7 @@ Content with [[wiki-links]] and (source: source-file.md) after factual claims.
 Present:
 - What the source is (1–2 sentences)
 - 5–10 key takeaways
-- Pages to create and pages to update (with summary of changes)
+- Pages to create and pages to update (with summary of changes). A page already over 200 lines (`lines` from `lobe_read_page`, or `lines=` in search hits): propose splitting it into a hub plus sub-pages instead of growing it.
 - Any conflicts between existing claims and new claims
 
 End with "Does this look right?" and wait for confirmation (unless the user explicitly asked not to wait for confirmation).

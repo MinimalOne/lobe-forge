@@ -827,6 +827,16 @@ Old note.
         assert not (page_file.parent / "brand-new.md").exists()
         assert app.git(page_file.parents[1], "status", "--porcelain").stdout == ""
 
+        # A write with log_entry rotates earlier months out of log.md, in the same commit
+        log_file = page_file.parent / "log.md"
+        log_file.write_text(log_file.read_text() + "\n## 2020-01-02 — Ingest: old\n\n- old\n")
+        app.git(page_file.parents[1], "commit", "-qam", "test: old log entry")
+        r = app.edit_page("edits", "pi5-setup", [{"op": "append", "content": "Rotated."}], log_entry="## 2099-01-01 — Ingest: new\n\n- new")
+        assert r["committed"] and "Ingest: old" not in log_file.read_text() and "Ingest: new" in log_file.read_text()
+        assert "Ingest: old" in (page_file.parent / "log" / "2020-01.md").read_text()
+        assert app.git(page_file.parents[1], "status", "--porcelain").stdout == ""
+        text, after = page_file.read_text(encoding="utf-8"), app.git(page_file.parents[1], "rev-parse", "HEAD").stdout.strip()
+
         # Parallel writers: every commit lands, none fails on git's index.lock
         errors: list[Exception] = []
 

@@ -8,7 +8,7 @@ The idea comes from Karpathy's "LLM wiki" pattern. You add sources, and the assi
 
 ```text
 raw/            Sources you added (append-only: never edited or deleted)
-wiki/           Markdown pages, plus index.md (table of contents) and log.md (history)
+wiki/           Markdown pages, plus index.md (table of contents) and log.md (history; earlier months in wiki/log/)
 wiki_tool.py    Search, links, sections, index, pending sources, lint
 wikictl         Wrapper that runs wiki_tool.py on this lobe
 LOBE.md         Page format and rules the assistant follows

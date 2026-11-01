@@ -75,6 +75,53 @@ with tempfile.TemporaryDirectory() as d:
     for i in range(30):
         (repo / "wiki" / f"p{i}.md").unlink()
 
+    # J long pages and K likely duplicates are soft checks: listed, but strict mode still passes
+    fm = "---\ntitle: {t}\nsummary: {s}\naliases:\n  - {a}\natoms:\n  - \"fact: {f}\"\nprovenance:\n  - test\nsources: []\nsource_count: 0\nlast_updated: 2026-11-01\n---\n\n# {t}\n"
+    pages = {
+        "vault-backup": fm.format(t="Vaultwarden backup", s="Nightly restic backup of vaultwarden data to the nas", a="vw backup", f="restic snapshots keep 30 days"),
+        "vaultwarden-backups": fm.format(t="Vaultwarden backups", s="Restic backup of vaultwarden data to the nas every night", a="vw backups", f="restic snapshots kept 30 days"),
+        "kodi-skins": fm.format(t="Kodi skins", s="Estuary and arctic zephyr skin settings for the living room tv", a="kodi theme", f="arctic zephyr needs kodi 21"),
+    }
+    pages["kodi-skins"] += "".join(f"\n## Part {i}\n\ntext\n" for i in range(70))
+    for slug, text in pages.items():
+        (repo / "wiki" / f"{slug}.md").write_text(text)
+        sh(f'"{repo}/wikictl" index-add --section General --page {slug} --description x')
+    r = sh(f'"{repo}/wikictl" lint --strict')
+    assert r.returncode == 0, r.stdout
+    assert "J. Long pages (over 200 lines) (1)  [warning — not blocking]" in r.stdout, r.stdout
+    assert f"kodi-skins.md — {len(pages['kodi-skins'].splitlines())} lines, 70 ## section(s): split into a hub page plus sub-pages" in r.stdout, r.stdout
+    k = [l for l in r.stdout.splitlines() if "similar to" in l]
+    assert len(k) == 1 and "vault-backup.md — similar to vaultwarden-backups.md" in k[0] and "60% shared words: 30, backup, data, day, nas" in k[0], r.stdout
+    assert "J." not in sh(f'"{repo}/wikictl" lint --max-lines 300').stdout
+    assert "similar to" not in sh(f'"{repo}/wikictl" lint --dup-threshold 0.99').stdout
+    for slug in pages:
+        (repo / "wiki" / f"{slug}.md").unlink()
+    git_idx = (repo / "wiki" / "index.md")
+    git_idx.write_text("".join(l for l in git_idx.read_text().splitlines(True) if not any(f"[[{p}]]" in l for p in pages)))
+
+    # rotate-log moves earlier months into log/<YYYY-MM>.md; this month and undated entries stay
+    log = repo / "wiki" / "log.md"
+    before = log.read_text()
+    log.write_text(before.rstrip("\n") + "\n\n## 2026-09-03 — Ingest: a\n\n- a\n\n## 2026-10-30 — Ingest: b\n\n- b\n"
+                   "\n## Notes without a date\n\n- keep\n\n## 2026-11-01 — Ingest: c\n\n- c\n")
+    r = sh(f'"{repo}/wikictl" rotate-log --month 2026-11')
+    assert r.returncode == 0 and "wiki/log/2026-09.md: 1 entry" in r.stdout and "wiki/log/2026-10.md: 1 entry" in r.stdout, r.stdout
+    kept = log.read_text()
+    assert "Ingest: a" not in kept and "Ingest: b" not in kept and "Notes without a date" in kept and "Ingest: c" in kept, kept
+    assert kept.count("Older entries: `wiki/log/<YYYY-MM>.md`") == 1, kept
+    oct_log = (repo / "wiki" / "log" / "2026-10.md").read_text()
+    assert oct_log.endswith("## 2026-10-30 — Ingest: b\n\n- b\n") and oct_log.startswith("# "), oct_log
+    assert sh(f'"{repo}/wikictl" rotate-log --month 2026-11').stdout == ""  # idempotent
+    r = sh(f'cd "{repo}" && "{repo}/wikictl" rotate-log --month 2000-01 && git add wiki/log.md wiki/log && echo staged')
+    assert r.stdout.strip() == "staged", r.stdout + r.stderr  # nothing to move still leaves wiki/log/ for `git add`
+    log.write_text(log.read_text() + "\n## 2026-10-31 — Ingest: d\n\n- d\n")
+    sh(f'"{repo}/wikictl" rotate-log --month 2026-11')
+    oct_log = (repo / "wiki" / "log" / "2026-10.md").read_text()
+    assert oct_log.index("Ingest: b") < oct_log.index("Ingest: d") and log.read_text().count("Older entries") == 1
+    r = sh(f'"{repo}/wikictl" lint --strict && "{repo}/wikictl" search ingest')
+    assert r.returncode in (0, 1) and "log/" not in r.stdout, r.stdout  # archives are not pages
+    sh(f'rm -rf "{repo}/wiki/log"'); log.write_text(before)
+
     # idempotent, keeps edits
     (repo / "LOBE.md").write_text("edited")
     code, out = run("create", "--name", "personal", "--purpose", "x", "--repo", str(repo), "--target", str(claude))

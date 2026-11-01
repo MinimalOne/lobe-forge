@@ -47,6 +47,8 @@ W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" path
 | D | Index drift — index row without page, or page not in index |
 | H | `sources:` file missing from `{{RAW}}/` |
 | I | Missing `atoms:` — existing page not yet migrated to include atoms in frontmatter |
+| J | Long page — over 200 lines; split into a hub page plus sub-pages |
+| K | Likely duplicate — two pages share half their title, alias, summary and atom words; merge, or link and narrow each |
 
 ## Step 2 — Reasoning checks on candidates
 
@@ -82,11 +84,13 @@ python3 -c "import json,collections as C;m=C.defaultdict(list);[m[s].append(e['p
 ### B. Orphans (N)
 ### D. Index (N)
 ### I. Missing atoms (N)
+### J. Long pages (N)
+### K. Likely duplicates (N)
 ### Pending raw sources (N)   ← from `pending`; offer `/{{NAME}}-ingest`
 ### E. Possibly outdated (N)
 ### F. Contradictions (N)
 
-Total: N — fix G, C, H first, then B, D and I.
+Total: N — fix G, C, H first, then B, D and I; J and K when the user wants a cleanup.
 ```
 
 ## Step 4 — Offer fixes
@@ -116,6 +120,17 @@ and write them into frontmatter without manual YAML edits:
 W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
 "$W" set-atoms <page> "cmd: ..." "decision: ..." "fact: ..."
 ```
+
+**Split a long page (J)**, one per run and only on a yes: read its `## ` headings
+(`grep -n '^## ' <page>`), propose 2–5 sub-pages, one per group of sections, and keep the original
+as a short hub: title, summary, the atoms that apply to the whole topic, and one line plus a
+`[[link]]` per sub-page. Each sub-page gets its own frontmatter, with the sources its sections
+cite. Register new pages with `index-add`, and rerun `lint --strict`.
+
+**Likely duplicates (K)**: read both pages' frontmatter. If they cover the same thing, merge the
+smaller into the larger (union of sources and atoms), replace the smaller page's body with a
+one-line pointer, and fix links to it. If they only overlap, add `[[links]]` both ways and narrow
+each summary so they no longer read alike.
 
 Then targeted `Edit`s only: recount `source_count`, move non-file sources to `provenance`, add
 missing index rows with `index-add`, add links to orphans from a related page. After fixing,

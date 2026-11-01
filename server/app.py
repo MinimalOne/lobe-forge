@@ -529,6 +529,9 @@ def write_page(
     page_file.write_text(content, encoding="utf-8")
 
     if log_entry and log_entry.strip():
+        # housekeeping only: a lobe on older tooling has no rotate-log, and that must not fail the write
+        if run_wiki_tool(lobe, "rotate-log")["returncode"] == 0 and (paths["WIKI"] / "log").is_dir():
+            staged.append(str((paths["WIKI"] / "log").relative_to(paths["REPO"])))
         log_file = paths["WIKI"] / "log.md"
         existing_log = log_file.read_text(encoding="utf-8") if log_file.exists() else f"# {lobe.title()} Wiki — Log\n"
         sep = "\n" if existing_log.endswith("\n") else "\n\n"

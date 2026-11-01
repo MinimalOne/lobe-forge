@@ -150,8 +150,24 @@ def test_part1_core_and_git_scenarios() -> None:
             assert remote_head() == before
             assert [l["autopush"] for l in app.list_lobes() if l["name"] == "hack"] == [False]
 
-            assert app.configure_remote("hack", str(bare_remote), autopush=None)["autopush"] is True
+            # null through REST and MCP unsets the lobe's value (not bool(None) == False), so the default applies
+            code, rem = app.dispatch_http("PUT", "/api/lobes/hack/remote",
+                                          json.dumps({"remote_url": str(bare_remote), "autopush": None}).encode())
+            assert code == 200 and rem["autopush"] is True, rem
+            assert app.git(app.l_paths("hack")["REPO"], "config", "--get", "lobe.autopush", check=False).returncode == 1
             assert app.add_raw("hack", "2026-10-30-default.md", "Pushed by default.\n")["pushed"] is True
+            app.configure_remote("hack", str(bare_remote), autopush=False)
+            mcp = app.handle_mcp_message({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {
+                "name": "lobe_configure_remote",
+                "arguments": {"lobe": "hack", "remote_url": str(bare_remote), "autopush": None}}})
+            assert mcp["result"]["structuredContent"]["autopush"] is True, mcp
+
+            # git's own booleans (yes/no/on/off/1/0) count, not only true/false
+            repo_dir = app.l_paths("hack")["REPO"]
+            app.git(repo_dir, "config", "lobe.autopush", "no")
+            assert app.autopush_enabled(repo_dir) is False
+            app.git(repo_dir, "config", "lobe.autopush", "on")
+            assert app.autopush_enabled(repo_dir) is True
 
             # lobe_create with an explicit autopush=false must not push its init commit
             empty_remote = tmp_path / "remote-optout.git"

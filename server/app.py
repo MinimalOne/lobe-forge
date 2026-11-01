@@ -178,9 +178,9 @@ def has_remote(repo: Path, remote: str = "origin") -> str | None:
 
 def autopush_enabled(repo: Path) -> bool:
     """The lobe's own `lobe.autopush` when set (true or false); otherwise the LOBE_GIT_PUSH default."""
-    cfg = git(repo, "config", "--get", "lobe.autopush", check=False).stdout.strip().lower()
-    if cfg in ("true", "false"):
-        return cfg == "true"
+    r = git(repo, "config", "--bool", "--get", "lobe.autopush", check=False)  # yes/on/1 -> true; unset or invalid: exit != 0
+    if r.returncode == 0:
+        return r.stdout.strip() == "true"
     return os.environ.get("LOBE_GIT_PUSH", "").lower() in ("1", "true", "yes")
 
 
@@ -658,7 +658,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
                 "name": {"type": "string", "description": "Lowercase hyphenated lobe name (e.g. hack, personal)."},
                 "purpose": {"type": "string", "description": "One-line purpose of the lobe."},
                 "remote_url": {"type": "string", "description": "Optional remote Git URL (origin)."},
-                "autopush": {"type": "boolean", "description": "Auto-push commits to origin. Omit to follow the server default (LOBE_GIT_PUSH)."},
+                "autopush": {"type": ["boolean", "null"], "description": "Auto-push commits to origin. Omit or null to follow the server default (LOBE_GIT_PUSH)."},
                 "generate_skills": {
                     "type": "boolean",
                     "description": "If true, also return the four rendered <name>-* SKILL.md files to install on the client machine.",
@@ -701,7 +701,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "lobe": {"type": "string"},
                 "remote_url": {"type": ["string", "null"], "description": "Remote Git URL, or null/empty to remove."},
-                "autopush": {"type": "boolean", "description": "Push automatically after local commits."},
+                "autopush": {"type": ["boolean", "null"], "description": "Push automatically after local commits (default true). null: follow the server default (LOBE_GIT_PUSH)."},
             },
             "required": ["lobe"],
         },
@@ -888,7 +888,7 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
         return configure_remote(
             lobe=args["lobe"],
             remote_url=args.get("remote_url"),
-            autopush=bool(args.get("autopush", True)),
+            autopush=None if (v := args.get("autopush", True)) is None else bool(v),
         )
     if name == "lobe_sync":
         return sync_lobe(
@@ -1113,7 +1113,7 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
                 return 200, configure_remote(
                     lobe=lobe,
                     remote_url=payload.get("remote_url"),
-                    autopush=bool(payload.get("autopush", True)),
+                    autopush=None if (v := payload.get("autopush", True)) is None else bool(v),
                 )
             if sub == "sync" and method == "POST" and len(parts) == 4:
                 return 200, sync_lobe(

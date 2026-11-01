@@ -932,6 +932,8 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
 
 def handle_mcp_message(msg: dict[str, Any]) -> dict[str, Any] | None:
     """Process a single JSON-RPC 2.0 MCP message and return a response dict (or None for notifications)."""
+    if not isinstance(msg, dict):  # e.g. a JSON-RPC batch: one bad message must not crash the stdio loop or 500 over HTTP
+        return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request: expected one JSON-RPC object"}}
     method = msg.get("method", "")
     msg_id = msg.get("id")
     params = msg.get("params") or {}

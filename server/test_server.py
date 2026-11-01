@@ -1023,6 +1023,8 @@ Old note.
         status, _ = app.dispatch_http("POST", "/api/lobes/edits/raw", json.dumps({"filename": "deep/2026-11-01-n0.md", "content": "x\n"}).encode())
         assert status == 409 and (raw_dir / "2026-11-01-n0.md").read_text() == "note 0\n"
         assert app.dispatch_http("POST", "/api/lobes/edits/raw", b"[1, 2]")[0] == 400  # not a JSON object
+        status, body = app.dispatch_http("POST", "/mcp", b"[1, 2]")
+        assert status == 200 and body["error"]["code"] == -32600, (status, body)
 
         # REST routes go through the MCP tools: same purpose, same skills, same errors
         assert app.dispatch_http("GET", "/api/lobes", b"")[1]["lobes"][0]["purpose"] == "Docs layout"

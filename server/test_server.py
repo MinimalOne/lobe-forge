@@ -138,6 +138,48 @@ def test_part1_core_and_git_scenarios() -> None:
         assert "raw: add 2026-10-30-pushed.md" in remote_log_after.stdout
         assert "wiki: create pi5-setup" in remote_log_after.stdout
 
+        # 6b. A lobe's own autopush=false beats LOBE_GIT_PUSH=1; an unset one follows it
+        os.environ["LOBE_GIT_PUSH"] = "1"
+        try:
+            remote_head = lambda: subprocess.run(  # noqa: E731
+                ["git", "-C", str(bare_remote), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+            ).stdout
+            before = remote_head()
+            assert app.configure_remote("hack", str(bare_remote), autopush=False)["autopush"] is False
+            assert app.add_raw("hack", "2026-10-30-optout.md", "Not pushed.\n")["pushed"] is False
+            assert remote_head() == before
+            assert [l["autopush"] for l in app.list_lobes() if l["name"] == "hack"] == [False]
+
+            # null through REST and MCP unsets the lobe's value (not bool(None) == False), so the default applies
+            code, rem = app.dispatch_http("PUT", "/api/lobes/hack/remote",
+                                          json.dumps({"remote_url": str(bare_remote), "autopush": None}).encode())
+            assert code == 200 and rem["autopush"] is True, rem
+            assert app.git(app.l_paths("hack")["REPO"], "config", "--get", "lobe.autopush", check=False).returncode == 1
+            assert app.add_raw("hack", "2026-10-30-default.md", "Pushed by default.\n")["pushed"] is True
+            app.configure_remote("hack", str(bare_remote), autopush=False)
+            mcp = app.handle_mcp_message({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {
+                "name": "lobe_configure_remote",
+                "arguments": {"lobe": "hack", "remote_url": str(bare_remote), "autopush": None}}})
+            assert mcp["result"]["structuredContent"]["autopush"] is True, mcp
+
+            # git's own booleans (yes/no/on/off/1/0) count, not only true/false
+            repo_dir = app.l_paths("hack")["REPO"]
+            app.git(repo_dir, "config", "lobe.autopush", "no")
+            assert app.autopush_enabled(repo_dir) is False
+            app.git(repo_dir, "config", "lobe.autopush", "on")
+            assert app.autopush_enabled(repo_dir) is True
+
+            # lobe_create with an explicit autopush=false must not push its init commit
+            empty_remote = tmp_path / "remote-optout.git"
+            subprocess.run(["git", "init", "--bare", "-q", str(empty_remote)], check=True)
+            created = app.create_lobe("optout", "Opt-out lobe", remote_url=str(empty_remote), autopush=False)
+            assert created["pushed"] is False
+            pushed_refs = subprocess.run(["git", "-C", str(empty_remote), "for-each-ref"], capture_output=True, text=True, check=True).stdout
+            assert pushed_refs == "", pushed_refs
+        finally:
+            os.environ.pop("LOBE_GIT_PUSH", None)
+        app.configure_remote("hack", str(bare_remote), autopush=True)
+
         # 7. Access check rejects unreachable/unauthorized remote_url on create_lobe and configure_remote
         bad_remote = str(tmp_path / "does-not-exist.git")
         try:

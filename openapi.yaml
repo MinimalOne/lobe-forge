@@ -575,9 +575,8 @@ components:
           type: [string, "null"]
           description: Optional remote Git repository URL (`origin`)
         autopush:
-          type: boolean
-          default: false
-          description: Whether to automatically push local commits to `origin`
+          type: [boolean, "null"]
+          description: Automatically push local commits to `origin`. Omit or null to follow the server default (`LOBE_GIT_PUSH`); a value set here overrides it for this lobe.
         generate_skills:
           type: boolean
           default: false
@@ -635,9 +634,9 @@ components:
           description: Remote Git URL (`origin`), or null/empty to remove remote
           example: https://github.com/user/personal.git
         autopush:
-          type: boolean
+          type: [boolean, "null"]
           default: true
-          description: Automatically push after local commits when remote is set
+          description: Automatically push after local commits when remote is set. `null` removes the lobe's own setting, so it follows the server default (`LOBE_GIT_PUSH`).
 
     ConfigureRemoteResponse:
       type: object

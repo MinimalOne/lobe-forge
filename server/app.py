@@ -664,7 +664,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "Lowercase hyphenated lobe name (e.g. hack, personal)."},
+                "name": {"type": "string", "description": "Lobe name: lowercase letters, digits and hyphens, starting with a letter, at most 30 characters (e.g. hack, personal)."},
                 "purpose": {"type": "string", "description": "One-line purpose of the lobe."},
                 "remote_url": {"type": "string", "description": "Optional remote Git URL (origin)."},
                 "autopush": {"type": ["boolean", "null"], "description": "Auto-push commits to origin. Omit or null to follow the server default (LOBE_GIT_PUSH)."},

@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, unquote, urlencode, urlparse
 ROOT = Path(__file__).resolve().parent.parent
 FORGE_SCRIPT = ROOT / "scripts" / "forge.py"
 PLUGIN_JSON = ROOT / ".claude-plugin" / "plugin.json"
-NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")  # page slugs; lobe names use forge.NAME_RE
 # ThreadingHTTPServer runs requests in parallel; one lock keeps page check-then-write and git commits atomic.
 _WRITE_LOCK = threading.RLock()
 
@@ -61,8 +61,8 @@ def lobes_root() -> Path:
 
 
 def resolve_lobe(lobe: str) -> Path:
-    if not NAME_RE.match(lobe):
-        raise ValueError(f"Invalid lobe name: {lobe!r} (expected lowercase letters, digits, hyphens)")
+    if not forge.NAME_RE.match(lobe):
+        raise ValueError(f"Invalid lobe name: {lobe!r} (expected lowercase letters, digits, hyphens; starts with a letter; max 30)")
     lobe_dir = (lobes_root() / lobe).resolve()
     if lobe_dir.parent != lobes_root() or not (lobe_dir / "wikictl").exists():
         raise FileNotFoundError(f"Lobe {lobe!r} not found in {lobes_root()}")
@@ -74,7 +74,11 @@ def git_auth_args_and_env(remote_url: str | None = None) -> tuple[list[str], dic
     env = {
         **os.environ,
         "GIT_TERMINAL_PROMPT": "0",
-        "GIT_SSH_COMMAND": os.environ.get("GIT_SSH_COMMAND", "ssh -o BatchMode=yes"),
+        # push and pull run under _WRITE_LOCK: a stalled connection must fail, not block every write
+        "GIT_SSH_COMMAND": os.environ.get(
+            "GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"),
+        "GIT_HTTP_LOW_SPEED_LIMIT": os.environ.get("GIT_HTTP_LOW_SPEED_LIMIT", "1"),
+        "GIT_HTTP_LOW_SPEED_TIME": os.environ.get("GIT_HTTP_LOW_SPEED_TIME", "30"),
     }
     extra_args: list[str] = []
     token = os.environ.get("LOBE_GIT_TOKEN", "").strip()
@@ -307,8 +311,8 @@ def create_lobe(
     generate_skills: bool = False,
     skill_mode: str = "mcp",
 ) -> dict[str, Any]:
-    if not NAME_RE.match(name):
-        raise ValueError(f"Invalid lobe name: {name!r} (expected lowercase letters, digits, hyphens)")
+    if not forge.NAME_RE.match(name):  # before any clone: a rejected name must leave nothing on disk
+        raise ValueError(f"Invalid lobe name: {name!r} (expected lowercase letters, digits, hyphens; starts with a letter; max 30)")
     repo_dir = lobes_root() / name
 
     cloned = False
@@ -442,16 +446,21 @@ def add_raw(lobe: str, filename: str, content: str) -> dict[str, Any]:
 
 
 def read_raw(lobe: str, filename: str) -> dict[str, Any]:
-    safe_name = Path(filename).name
-    if not safe_name or safe_name in (".", ".."):
-        raise ValueError(f"Invalid raw filename: {filename!r}")
+    """Read a raw source by name, by path inside the raw folder, or by the repo path lobe_pending prints."""
     paths = l_paths(lobe)
-    raw_file = paths["RAW"] / safe_name
-    if not raw_file.exists():
-        raise FileNotFoundError(f"Raw source {safe_name!r} not found in lobe {lobe!r}")
+    raw_root = paths["RAW"].resolve()
+    rel = Path(filename)
+    prefix = paths["RAW"].relative_to(paths["REPO"]).parts  # ('raw',) or ('docs',)
+    if rel.parts[: len(prefix)] == prefix:
+        rel = Path(*rel.parts[len(prefix):])
+    raw_file = (raw_root / rel).resolve()
+    if raw_root not in raw_file.parents:  # rejects "", "..", absolute paths and links out of the raw folder
+        raise ValueError(f"Invalid raw filename: {filename!r} (must be inside {paths['RAW'].name}/)")
+    if not raw_file.is_file():
+        raise FileNotFoundError(f"Raw source {filename!r} not found in lobe {lobe!r}")
     return {
         "lobe": lobe,
-        "filename": safe_name,
+        "filename": raw_file.relative_to(raw_root).as_posix(),
         "path": str(raw_file.relative_to(paths["REPO"])),
         "content": raw_file.read_text(encoding="utf-8", errors="replace"),
     }
@@ -544,7 +553,7 @@ def write_page(
     expected_sha: str | None = None,
 ) -> dict[str, Any]:
     clean_slug = Path(slug).stem
-    if not NAME_RE.match(clean_slug):
+    if not SLUG_RE.match(clean_slug):
         raise ValueError(f"Invalid page slug: {slug!r} (expected lowercase letters, digits, hyphens)")
     paths = l_paths(lobe)
     page_file = paths["WIKI"] / f"{clean_slug}.md"
@@ -655,7 +664,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "Lowercase hyphenated lobe name (e.g. hack, personal)."},
+                "name": {"type": "string", "description": "Lobe name: lowercase letters, digits and hyphens, starting with a letter, at most 30 characters (e.g. hack, personal)."},
                 "purpose": {"type": "string", "description": "One-line purpose of the lobe."},
                 "remote_url": {"type": "string", "description": "Optional remote Git URL (origin)."},
                 "autopush": {"type": ["boolean", "null"], "description": "Auto-push commits to origin. Omit or null to follow the server default (LOBE_GIT_PUSH)."},
@@ -790,7 +799,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "lobe": {"type": "string"},
-                "filename": {"type": "string", "description": "Filename in raw/ (e.g. 2026-10-30-notes.md)."},
+                "filename": {"type": "string", "description": "Filename in the raw folder (e.g. 2026-10-30-notes.md), or a path as lobe_pending prints it (e.g. docs/sub/notes.md)."},
             },
             "required": ["lobe", "filename"],
         },
@@ -1139,8 +1148,8 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
                 return 200, run_wiki_tool(lobe, "links", parts[4])
             if sub == "raw" and method == "POST" and len(parts) == 4:
                 return 201, add_raw(lobe, payload["filename"], payload["content"])
-            if sub == "raw" and method == "GET" and len(parts) == 5:
-                return 200, read_raw(lobe, parts[4])
+            if sub == "raw" and method == "GET" and len(parts) >= 5:
+                return 200, read_raw(lobe, "/".join(parts[4:]))
             if sub == "pages" and len(parts) == 5:
                 slug = parts[4]
                 if method == "GET":

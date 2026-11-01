@@ -31,7 +31,7 @@ lobe-server implements MCP protocol version `2025-06-18` over Streamable HTTP (`
 | `lobe_links` | `lobe`, `page` | | Incoming and outgoing `[[wiki-links]]` of a page. |
 | `lobe_sections` | `lobe` | | `## Section` headings in `wiki/index.md`. |
 | `lobe_pending` | `lobe` | | Sources in `raw/` that no page cites yet. |
-| `lobe_lint` | `lobe` | `strict` | Check frontmatter, links, orphans, and index drift. |
+| `lobe_lint` | `lobe` | `strict` | Check frontmatter, links, orphans, and index drift. Lists at most 20 issues per check, and sums up missing sources by folder; run `wikictl lint --all` locally for the full list. |
 | `lobe_add_raw` | `lobe`, `filename`, `content` | | Save a source in `raw/`, commit, and push if enabled. |
 | `lobe_read_raw` | `lobe`, `filename` | | Read `raw/<filename>`. |
 | `lobe_read_page` | `lobe`, `slug` | `section`, `start_line`, `end_line` | Read `wiki/<slug>.md`, or only one `## ` section or a line range. Returns `sha` and the page's `lines`; a partial read also lists the page's `sections`. |

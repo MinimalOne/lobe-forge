@@ -58,6 +58,23 @@ with tempfile.TemporaryDirectory() as d:
     rp = repo.resolve()
     assert r.stdout.splitlines() == [f"{rp}|{rp}/wiki|{rp}/raw", "General", "rc=0"], r.stdout + r.stderr
 
+    # lint caps each check at --limit lines and explains a systematic missing-source gap per folder
+    page = "---\ntitle: P{i}\nsummary: s\natoms:\n  - \"fact: x\"\nsources:\n  - raw/docs/a{i}.md\nsource_count: 1\nlast_updated: 2026-11-01\n---\n\n# P{i}\n"
+    for i in range(30):
+        (repo / "wiki" / f"p{i}.md").write_text(page.format(i=i))
+    r = sh(f'"{repo}/wikictl" lint --strict')
+    h = r.stdout[r.stdout.index("H. Missing source files (30)"):]
+    assert r.returncode == 1 and "30 distinct file(s) cited by 30 page(s), by folder:" in h, r.stdout
+    assert "raw/docs/ — 30 file(s)  (folder missing)" in h and "raw/ is missing or empty" in h, h
+    assert sum("not found on disk" in l for l in h.splitlines()) == 20 and "… and 10 more (lint --all" in h, h
+    assert r.stdout.count("… and 10 more") == 3, r.stdout  # B and D are capped too
+    r_all = sh(f'"{repo}/wikictl" lint --all')
+    assert r_all.stdout.count("not found on disk") == 30 and "… and" not in r_all.stdout and "by folder" not in r_all.stdout
+    r_few = sh(f'"{repo}/wikictl" lint --limit 5')
+    assert r_few.stdout.count("not found on disk") == 5 and "… and 25 more" in r_few.stdout, r_few.stdout
+    for i in range(30):
+        (repo / "wiki" / f"p{i}.md").unlink()
+
     # idempotent, keeps edits
     (repo / "LOBE.md").write_text("edited")
     code, out = run("create", "--name", "personal", "--purpose", "x", "--repo", str(repo), "--target", str(claude))

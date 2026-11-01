@@ -161,14 +161,53 @@ def test_part1_core_and_git_scenarios() -> None:
             b64 = [a.split("Basic ", 1)[1] for a in args if "Basic " in a][0]
             return base64.b64decode(b64).decode("utf-8")
 
+        def with_host(host: str, url: str) -> str:
+            os.environ["LOBE_GIT_TOKEN_HOST"] = host
+            return decoded_header(url)
+
         os.environ["LOBE_GIT_TOKEN"] = "ghp_testtoken123"
         assert decoded_header("https://github.com/u/r.git") == "x-access-token:ghp_testtoken123"
-        assert decoded_header("https://codeberg.org/u/r.git") == "x-access-token:ghp_testtoken123"
-        assert decoded_header("https://gitlab.com/u/r.git") == "oauth2:ghp_testtoken123"
-        assert decoded_header("https://bitbucket.org/u/r.git") == "x-token-auth:ghp_testtoken123"
+        assert with_host("codeberg.org", "https://codeberg.org/u/r.git") == "x-access-token:ghp_testtoken123"
+        assert with_host("gitlab.com", "https://gitlab.com/u/r.git") == "oauth2:ghp_testtoken123"
+        assert with_host("bitbucket.org", "https://bitbucket.org/u/r.git") == "x-token-auth:ghp_testtoken123"
 
         os.environ["LOBE_GIT_TOKEN"] = "myuser:myapppass"
-        assert decoded_header("https://bitbucket.org/u/r.git") == "myuser:myapppass"
+        assert with_host("bitbucket.org", "https://bitbucket.org/u/r.git") == "myuser:myapppass"
+        os.environ.pop("LOBE_GIT_TOKEN_HOST")
+
+        # The token goes only to the configured host (default github.com), scoped to that host's URL
+        os.environ["LOBE_GIT_TOKEN"] = "ghp_testtoken123"
+        for leak in ["https://evil.example/u/r.git", "https://github.com@evil.example/u/r.git",
+                     "https://github.com.evil.example/u/r.git", "git@github.com:u/r.git", str(bad_remote)]:
+            assert app.git_auth_args_and_env(leak)[0] == [], leak
+        args, _ = app.git_auth_args_and_env("https://me@github.com/u/r.git")
+        assert args[1].startswith("http.https://github.com/.extraHeader="), args
+
+        # A failed git command reports git's message, never the token: local commands get no auth args
+        app.create_lobe("leak", "Token leak test")
+        leak_repo = app.l_paths("leak")["REPO"]
+        # codeberg, not github: a developer's url.<ssh>.insteadOf for github.com would hide the leak
+        os.environ["LOBE_GIT_TOKEN_HOST"] = "codeberg.org"
+        app.configure_remote("leak", "https://codeberg.org/u/leak.git", autopush=False, verify=False)
+        assert app.git_auth_args_and_env(app.has_remote(leak_repo))[0], "test must use a remote that gets the token"
+        try:
+            app.git(leak_repo, "commit", "-q", "-m", "nothing staged")
+            raise AssertionError("Expected GitError for an empty commit")
+        except app.GitError as exc:
+            assert "ghp_testtoken123" not in str(exc) and "Basic" not in str(exc), str(exc)
+            assert "nothing" in str(exc), str(exc)
+        res = app.handle_mcp_message({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                                      "params": {"name": "lobe_links", "arguments": {"lobe": "leak", "page": "x"}}})
+        assert "Basic" not in json.dumps(res)
+        os.environ.pop("LOBE_GIT_TOKEN_HOST")
+
+        # LOBE_GIT_TOKEN_HOST may carry a scheme and port; a given port must match
+        os.environ["LOBE_GIT_TOKEN_HOST"] = "https://git.internal:8443/"
+        assert app.git_auth_args_and_env("https://git.internal:8443/u/r.git")[0]
+        assert app.git_auth_args_and_env("https://git.internal/u/r.git")[0] == []
+        os.environ["LOBE_GIT_TOKEN_HOST"] = "Codeberg.org"
+        assert app.git_auth_args_and_env("https://codeberg.org:443/u/r.git")[0]
+        os.environ.pop("LOBE_GIT_TOKEN_HOST")
         os.environ.pop("LOBE_GIT_TOKEN", None)
 
         # 8. Clone existing non-empty remote in create_lobe & explicit sync_lobe across two installations
@@ -639,6 +678,16 @@ def test_part3_container_isolation_and_compose() -> None:
         assert resps[1]["result"]["isError"] is False
         assert resps[1]["result"]["structuredContent"]["returncode"] == 0
 
+        # HTTP mode refuses a non-loopback address when no authentication is configured
+        no_auth = {k: v for k, v in os.environ.items() if k not in ("LOBE_API_TOKEN", "LOBE_OAUTH_ISSUER")}
+        refused = subprocess.run(
+            [sys.executable, str(app_root / "server" / "app.py"), "--host", "0.0.0.0", "--port", "0"],
+            capture_output=True, text=True, env={**no_auth, "LOBES_DIR": str(lobes_dir)}, timeout=30,
+        )
+        assert refused.returncode != 0 and "refusing to listen" in refused.stderr, refused.stderr
+
+    assert '"127.0.0.1:${LOBE_PORT:-8080}:8080"' in compose
+
 
 def test_part4_oauth_resource_server() -> None:
     from http.server import BaseHTTPRequestHandler
@@ -847,6 +896,14 @@ Old note.
                 app.add_raw("edits", f"2026-11-01-n{i}.md", f"note {i}\n")
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
+
+        # Saving unchanged content while an unrelated file is untracked commits nothing and does not fail
+        stray = page_file.parents[1] / "raw" / "stray.md"
+        stray.write_text("made by another tool\n")
+        unchanged = page_file.read_text(encoding="utf-8")
+        status, body = app.dispatch_http("PUT", "/api/lobes/edits/pages/pi5-setup", json.dumps({"content": unchanged}).encode())
+        assert status == 200 and body["committed"] is False, (status, body)
+        stray.unlink()
 
         threads = [threading.Thread(target=save, args=(i,)) for i in range(8)]
         for t in threads:

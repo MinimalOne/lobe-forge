@@ -747,6 +747,11 @@ components:
         end_line:
           type: integer
           description: Last returned line, present only for a section or line-range read
+        sections:
+          type: array
+          items:
+            type: string
+          description: The page's `## ` headings, present only for a section or line-range read
         content:
           type: string
 

@@ -13,7 +13,7 @@ version: 1.0.0
 
 Ingest a raw source into the **{{NAME}}** lobe on `lobe-server` via MCP. Purpose: {{PURPOSE}}
 
-> **Rules**: Never modify `{{RAW}}/`. Never read `{{WIKI}}/index.md` or `{{WIKI}}/log.md` whole — use `lobe_search`, `lobe_sections`, and the `section`, `description`, and `log_entry` fields of `lobe_write_page` / `lobe_edit_page`. Never rewrite an existing page with `lobe_write_page`; change it with `lobe_edit_page`.
+> **Rules**: Never modify `{{RAW}}/`. Never read `{{WIKI}}/index.md` or `{{WIKI}}/log.md` whole — use `lobe_search`, `lobe_sections`, and the `section`, `description`, and `log_entry` fields of `lobe_write_page` (`index_section`, `index_description`, and `log_entry` on `lobe_edit_page`). Never rewrite an existing page with `lobe_write_page`; change it with `lobe_edit_page`.
 
 ## Page Format
 
@@ -62,7 +62,7 @@ Content with [[wiki-links]] and (source: source-file.md) after factual claims.
      "limit": 5
    }
    ```
-3. **Read matched pages**: Call **`lobe_read_page`** (`{"lobe": "{{NAME}}", "slug": "<page>"}`) for every matched page, and **`lobe_links`** (`{"lobe": "{{NAME}}", "page": "<page>"}`) to inspect neighbors. Keep each page's returned `sha`. For a page over 120 lines, read the frontmatter (`"start_line": 1, "end_line": 20`) plus only the sections the source touches (`"section": "<Section>"`).
+3. **Read matched pages**: Call **`lobe_read_page`** (`{"lobe": "{{NAME}}", "slug": "<page>"}`) for every matched page, and **`lobe_links`** (`{"lobe": "{{NAME}}", "page": "<page>"}`) to inspect neighbors. Keep each page's returned `sha`. For a page over 120 lines, read the frontmatter (`"start_line": 1, "end_line": 20`); the response lists the page's `sections`, so then read only the ones the source touches (`"section": "<Section>"`).
 
 ### Step 3 — Plan, then wait
 

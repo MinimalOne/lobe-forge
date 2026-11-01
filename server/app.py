@@ -432,8 +432,8 @@ def page_sha(text: str) -> str:
 def h2_spans(lines: list[str]) -> list[tuple[str, int, int]]:
     """(heading text, heading index, end index exclusive) for each `## ` heading outside frontmatter and ``` fences."""
     start = 0
-    if lines and lines[0].rstrip("\n") == "---":
-        start = next((i + 1 for i in range(1, len(lines)) if lines[i].rstrip("\n") == "---"), 0)
+    if lines and lines[0].rstrip("\r\n") == "---":
+        start = next((i + 1 for i in range(1, len(lines)) if lines[i].rstrip("\r\n") == "---"), 0)
     heads, fenced = [], False
     for i in range(start, len(lines)):
         if lines[i].lstrip().startswith("```"):
@@ -491,10 +491,13 @@ def read_page(
     if start_line is None and end_line is None:
         out["content"] = text
         return out
-    start, end = max(1, int(start_line or 1)), min(len(lines), int(end_line or len(lines)))
-    if start > end:
-        raise ValueError(f"Empty line range {start_line}-{end_line} (page has {len(lines)} lines)")
-    out.update(start_line=start, end_line=end, content="".join(lines[start - 1 : end]))
+    start = 1 if start_line is None else int(start_line)
+    end = len(lines) if end_line is None else min(len(lines), int(end_line))
+    if start < 1 or start > end:
+        raise ValueError(f"Invalid line range {start_line}-{end_line} (page has {len(lines)} lines)")
+    # a partial read hides the page's headings, so list them for follow-up section reads
+    out.update(start_line=start, end_line=end, sections=[n for n, _, _ in h2_spans(lines)])
+    out["content"] = "".join(lines[start - 1 : end])
     return out
 
 
@@ -515,14 +518,15 @@ def write_page(
     page_file = paths["WIKI"] / f"{clean_slug}.md"
     is_new = not page_file.exists()
     check_sha(None if is_new else page_file.read_text(encoding="utf-8"), expected_sha)
-    page_file.write_text(content, encoding="utf-8")
 
     staged = [str(page_file.relative_to(paths["REPO"]))]
     if section and description:
+        # before the page write: index-add fails without writing, so a bad section leaves nothing on disk
         idx = run_wiki_tool(lobe, "index-add", "--section", section, "--page", clean_slug, "--description", description)
         if idx["returncode"] != 0:
             raise RuntimeError((idx["stderr"] or idx["stdout"]).strip())
         staged.append(str((paths["WIKI"] / "index.md").relative_to(paths["REPO"])))
+    page_file.write_text(content, encoding="utf-8")
 
     if log_entry and log_entry.strip():
         log_file = paths["WIKI"] / "log.md"
@@ -537,12 +541,19 @@ def write_page(
 
 
 def apply_edit(text: str, edit: dict[str, Any]) -> str:
-    op, content = edit.get("op"), edit.get("content", "")
+    if not isinstance(edit, dict):
+        raise ValueError(f"Each edit must be an object, got {edit!r}")
+    op, content = edit.get("op"), edit.get("content")
+    if not isinstance(content, str):
+        raise ValueError("Each edit needs a string 'content'")
     if op == "find_replace":
-        find = edit.get("find") or ""
-        if not find:
-            raise ValueError("find_replace needs a non-empty 'find'")
-        expected = int(edit.get("expected_count", 1))
+        find = edit.get("find")
+        if not isinstance(find, str) or not find:
+            raise ValueError("find_replace needs a non-empty string 'find'")
+        expected = edit.get("expected_count")
+        expected = 1 if expected is None else expected
+        if not isinstance(expected, int) or isinstance(expected, bool) or expected < 1:
+            raise ValueError(f"expected_count must be an integer >= 1, got {expected!r}")
         found = text.count(find)
         if found != expected:
             raise ValueError(f"'find' text matched {found} time(s), expected {expected}: {find[:80]!r}")
@@ -580,7 +591,7 @@ def edit_page(
     index_description: str | None = None,
 ) -> dict[str, Any]:
     """Apply edits in order to an existing page and commit once; any failing edit aborts all of them."""
-    if not edits:
+    if not isinstance(edits, list) or not edits:
         raise ValueError("edits must be a non-empty list")
     page = read_page(lobe, slug)
     check_sha(page["content"], expected_sha)
@@ -760,7 +771,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "lobe": {"type": "string"},
                 "slug": {"type": "string"},
-                "section": {"type": "string", "description": "Return only this `## ` section (heading text, case-insensitive)."},
+                "section": {"type": "string", "description": "Return only this `## ` section (heading text, case-insensitive). Partial reads also return the page's `sections`."},
                 "start_line": {"type": "integer", "description": "First line to return (1-based, counts frontmatter)."},
                 "end_line": {"type": "integer", "description": "Last line to return (inclusive)."},
             },

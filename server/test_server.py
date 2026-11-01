@@ -743,8 +743,11 @@ Old note.
         assert "Old note." not in setup["content"]
         assert app.read_page("edits", "pi5-setup", section="Notes")["content"] == "## Notes\n\nOld note.\n"
         rng = app.read_page("edits", "pi5-setup", start_line=setup["start_line"], end_line=setup["start_line"])
-        assert rng["content"] == "## Setup\n"
-        for bad in [{"section": "Missing"}, {"start_line": 9999}]:
+        assert rng["content"] == "## Setup\n" and rng["sections"] == ["Setup", "Notes"]
+        assert "sections" not in full
+        crlf = app.h2_spans(["---\r\n", "## yaml\r\n", "---\r\n", "## Real\r\n"])
+        assert [n for n, _, _ in crlf] == ["Real"]
+        for bad in [{"section": "Missing"}, {"start_line": 9999}, {"start_line": 1, "end_line": 0}, {"start_line": 0}]:
             try:
                 app.read_page("edits", "pi5-setup", **bad)
                 raise AssertionError(f"Expected ValueError for {bad}")
@@ -784,7 +787,15 @@ Old note.
             ([{"op": "find_replace", "find": "a", "content": "b", "expected_count": 1}], None, ValueError),
             ([{"op": "append", "content": "x"}], full["sha"], RuntimeError),
             ([{"op": "delete", "content": ""}], None, ValueError),
+            ([{"op": "append", "content": None}], None, ValueError),
+            ([{"op": "find_replace", "find": "Tail line.", "content": "x", "expected_count": None}], None, None),
+            ([{"op": "find_replace", "find": "Tail line.", "content": "x", "expected_count": 0}], None, ValueError),
+            (["not-an-object"], None, ValueError),
+            ("not-a-list", None, ValueError),
         ]:
+            if exc is None:  # null expected_count means the default of 1: validate it without committing
+                assert app.apply_edit(text, edits[0]).endswith("x\n")
+                continue
             try:
                 app.edit_page("edits", "pi5-setup", edits, expected_sha=sha)
                 raise AssertionError(f"Expected {exc.__name__} for {edits}")
@@ -797,6 +808,15 @@ Old note.
         except RuntimeError:
             pass
         assert page_file.read_text(encoding="utf-8") == text
+
+        # A bad index section fails before anything is written (an already-indexed page skips index-add)
+        try:
+            app.write_page("edits", "brand-new", "clobber", section="No Such Section", description="x")
+            raise AssertionError("Expected RuntimeError for unknown index section")
+        except RuntimeError:
+            pass
+        assert not (page_file.parent / "brand-new.md").exists()
+        assert app.git(page_file.parents[1], "status", "--porcelain").stdout == ""
 
         # Parallel writers: every commit lands, none fails on git's index.lock
         errors: list[Exception] = []

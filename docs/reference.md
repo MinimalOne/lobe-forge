@@ -34,7 +34,7 @@ lobe-server implements MCP protocol version `2025-06-18` over Streamable HTTP (`
 | `lobe_lint` | `lobe` | `strict` | Check frontmatter, links, orphans, and index drift. |
 | `lobe_add_raw` | `lobe`, `filename`, `content` | | Save a source in `raw/`, commit, and push if enabled. |
 | `lobe_read_raw` | `lobe`, `filename` | | Read `raw/<filename>`. |
-| `lobe_read_page` | `lobe`, `slug` | `section`, `start_line`, `end_line` | Read `wiki/<slug>.md`, or only one `## ` section or a line range. Returns `sha` and the page's `lines`. |
+| `lobe_read_page` | `lobe`, `slug` | `section`, `start_line`, `end_line` | Read `wiki/<slug>.md`, or only one `## ` section or a line range. Returns `sha` and the page's `lines`; a partial read also lists the page's `sections`. |
 | `lobe_write_page` | `lobe`, `slug`, `content` | `section`, `description`, `log_entry`, `expected_sha` | Write `wiki/<slug>.md`, optionally add it to `index.md` and append to `log.md`, commit, and push if enabled. With `expected_sha`, fails if the page changed since it was read. |
 | `lobe_edit_page` | `lobe`, `slug`, `edits` | `expected_sha`, `log_entry`, `index_section`, `index_description` | Change part of an existing page. Each edit is `find_replace` (`find`, `content`, `expected_count`), `append` (`content`, `section`), or `replace_section` (`section`, `content`). All edits apply in one commit, or none do. |
 

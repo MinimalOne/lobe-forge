@@ -560,6 +560,11 @@ def unmask_code(text: str, tokens: list[str]) -> str:
     return text
 
 
+def heading_id(text: str) -> str:
+    """GitHub-style heading anchor: `Setup Steps (v2)` -> `setup-steps-v2`; a link target cannot hold spaces."""
+    return re.sub(r"[^\w\- ]", "", text.strip().lower()).replace(" ", "-")
+
+
 def rewrite_wiki_link(match: re.Match) -> str:
     """Rewrite a [[wiki-link]] match into an OKF-compliant markdown link."""
     raw = match.group(1).strip()
@@ -585,7 +590,7 @@ def rewrite_wiki_link(match: re.Match) -> str:
     if not display:
         display = slug if slug else anchor
 
-    clean_anchor = anchor.lstrip("#")
+    clean_anchor = heading_id(anchor.lstrip("#"))
     if not slug:
         href = f"#{clean_anchor}"
     else:
@@ -1490,6 +1495,10 @@ def cmd_set_type(args) -> int:
     return rc
 
 
+OKF_VERSION = "0.2"
+OKF_DATE_KEYS = ("last_updated", "stale_after")
+
+
 def _format_iso_instant(val: str) -> str:
     """Format a date or timestamp string as full ISO 8601 with UTC offset (e.g. 2026-11-02T00:00:00Z)."""
     val = val.strip().strip("'\"")
@@ -1509,7 +1518,7 @@ def transform_frontmatter_okf(fm_lines: list[str], is_index: bool = False) -> li
     has_okf_version = any(_fm_key(l) == "okf_version" for l in fm_lines)
 
     if is_index and not has_okf_version:
-        out.append('okf_version: "0.2"\n')
+        out.append(f'okf_version: "{OKF_VERSION}"\n')
 
     in_trust_block = False
     for line in fm_lines:
@@ -1521,7 +1530,7 @@ def transform_frontmatter_okf(fm_lines: list[str], is_index: bool = False) -> li
                 out.append("description:" + line[colon_idx + 1:])
                 has_description = True
                 continue
-            elif k == "stale_after":
+            elif k in OKF_DATE_KEYS:
                 key_part, sep, val_part = line.partition(":")
                 formatted = _format_iso_instant(val_part)
                 out.append(f"{key_part}: {formatted}\n")
@@ -1549,70 +1558,43 @@ def transform_frontmatter_okf(fm_lines: list[str], is_index: bool = False) -> li
 
 
 def export_okf_page(text: str, is_index: bool = False) -> str:
-    """Transform a single wiki page into an OKF v0.2 page."""
-    fm, _ = parse_frontmatter(text)
-    if fm is not None:
-        end = text.index("\n---\n", 4)
-        fm_block = text[4:end]
-        fm_lines = [l + "\n" for l in fm_block.splitlines()]
-        transformed_fm = transform_frontmatter_okf(fm_lines, is_index=is_index)
-        new_fm_text = "---\n" + "".join(transformed_fm) + "---\n"
-        rest_body = text[end + 5:]
+    """Transform a single wiki page into an OKF page."""
+    lines = text.splitlines(keepends=True)
+    start = body_start(lines)
+    if start:
+        new_fm_text = "---\n" + "".join(transform_frontmatter_okf(lines[1:start - 1], is_index=is_index)) + "---\n"
     else:
-        if is_index:
-            new_fm_text = '---\nokf_version: "0.2"\n---\n\n'
-        else:
-            new_fm_text = ""
-        rest_body = text
-
-    masked_body, tokens = mask_code(rest_body)
+        new_fm_text = f'---\nokf_version: "{OKF_VERSION}"\n---\n\n' if is_index else ""
+    masked_body, tokens = mask_code("".join(lines[start:]))
     rewritten_body = re.sub(r"\[\[([^\]]+)\]\]", rewrite_wiki_link, masked_body)
-    restored_body = unmask_code(rewritten_body, tokens)
-
-    return new_fm_text + restored_body
+    return new_fm_text + unmask_code(rewritten_body, tokens)
 
 
 def export_okf_bundle(wiki_dir: Path, output_dir: Path | None = None) -> dict[str, str]:
-    """Export all wiki markdown pages from wiki_dir into an OKF v0.2 bundle."""
+    """Export index.md and the wiki pages in wiki_dir as an OKF bundle {relative path: text}.
+    log.md and the rotated log/ files record changes, not knowledge, so they stay out."""
     if not wiki_dir.is_dir():
         raise FileNotFoundError(f"Wiki directory not found: {wiki_dir}")
-
-    exported: dict[str, str] = {}
-    for path in sorted(wiki_dir.rglob("*.md")):
-        rel = path.relative_to(wiki_dir)
-        rel_str = str(rel)
-        text = path.read_text(encoding="utf-8")
-        is_index = (rel_str == "index.md")
-        out_text = export_okf_page(text, is_index=is_index)
-        exported[rel_str] = out_text
-
-        if output_dir is not None:
-            dest = output_dir / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(out_text, encoding="utf-8")
-
-    if "index.md" not in exported:
-        index_content = '---\nokf_version: "0.2"\n---\n\n# Index\n'
-        exported["index.md"] = index_content
-        if output_dir is not None:
-            (output_dir / "index.md").write_text(index_content, encoding="utf-8")
-
+    exported = {p.name: export_okf_page(p.read_text(encoding="utf-8"), is_index=p.name == "index.md")
+                for p in sorted(wiki_dir.glob("*.md")) if p.name != "log.md"}
+    exported.setdefault("index.md", f'---\nokf_version: "{OKF_VERSION}"\n---\n\n# Index\n')
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for name, out_text in exported.items():
+            (output_dir / name).write_text(out_text, encoding="utf-8")
     return exported
 
 
 def cmd_export_okf(args) -> int:
-    output_dir = Path(args.output) if args.output else None
-    if output_dir:
-        output_dir.mkdir(parents=True, exist_ok=True)
-    elif not getattr(args, "json", False):
+    if not args.output and not args.json:
         print("export-okf: error: output directory or --json is required", file=sys.stderr)
         return 1
-
-    exported = export_okf_bundle(WIKI, output_dir=output_dir)
-    if getattr(args, "json", False):
-        print(json.dumps({"okf_version": "0.2", "page_count": len(exported), "files": exported}, indent=2))
-    if output_dir:
-        print(f"Exported {len(exported)} pages to {args.output} (OKF v0.2)")
+    exported = export_okf_bundle(WIKI, output_dir=Path(args.output) if args.output else None)
+    if args.json:
+        print(json.dumps({"okf_version": OKF_VERSION, "page_count": len(exported), "files": exported}, indent=2))
+    if args.output:
+        # stderr, so --json output on stdout stays valid JSON
+        print(f"Exported {len(exported)} pages to {args.output} (OKF v{OKF_VERSION})", file=sys.stderr)
     return 0
 
 

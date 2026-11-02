@@ -1474,7 +1474,7 @@ def test_part9_page_types_and_lifecycle() -> None:
 
 
 def test_part10_export_okf() -> None:
-    """Test Part 10: OKF v0.2 bundle export via MCP tool and REST endpoint."""
+    """Test Part 10: OKF v0.2 bundle export via the REST endpoint (no MCP tool)."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         token = "test-export-token-12345"
         os.environ["LOBES_DIR"] = tmp_dir
@@ -1510,13 +1510,17 @@ Inline `[[inline-code]]` check.
 """
         app.write_page("okflobe", "export-runbook", page_content, section="General", description="Backup operations")
 
-        # 3. Test MCP tool lobe_export_okf
-        res = app.call_mcp_tool("lobe_export_okf", {"lobe": "okflobe"})
-        assert res["lobe"] == "okflobe"
+        # 3. The export is REST only: an agent cannot pull the whole wiki in one MCP call
+        rpc = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
+        _, tools = app.dispatch_http("POST", "/mcp", rpc, f"Bearer {token}")
+        assert "lobe_export_okf" not in {t["name"] for t in tools["result"]["tools"]}
+        status, res = app.dispatch_http("GET", "/api/lobes/okflobe/export-okf", b"", f"Bearer {token}")
+        assert status == 200 and res["lobe"] == "okflobe"
         assert res["okf_version"] == "0.2"
         assert res["page_count"] >= 2
         assert "index.md" in res["files"]
         assert "export-runbook.md" in res["files"]
+        assert "log.md" not in res["files"], sorted(res["files"])
 
         rb = res["files"]["export-runbook.md"]
         assert "description: Backup operations guide." in rb
@@ -1524,17 +1528,15 @@ Inline `[[inline-code]]` check.
         assert "stale_after: 2026-12-31T00:00:00Z" in rb
         assert "[Cluster Setup](/cluster-setup.md)" in rb
         assert "[index](/index.md#overview)" in rb
+        assert "last_updated: " not in rb or "T00:00:00Z" in rb
         assert 'echo "[[not-a-link]]"' in rb
         assert "`[[inline-code]]`" in rb
 
         idx = res["files"]["index.md"]
         assert 'okf_version: "0.2"' in idx
 
-        # 4. Test REST endpoint GET /api/lobes/{lobe}/export-okf
-        status, data = app.dispatch_http("GET", "/api/lobes/okflobe/export-okf", b"", f"Bearer {token}")
-        assert status == 200
-        assert data["okf_version"] == "0.2"
-        assert data["files"]["export-runbook.md"] == rb
+        # 4. The endpoint needs auth like every other route
+        assert app.dispatch_http("GET", "/api/lobes/okflobe/export-okf", b"")[0] == 401
 
 
 if __name__ == "__main__":

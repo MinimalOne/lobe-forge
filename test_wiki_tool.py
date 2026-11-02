@@ -744,6 +744,9 @@ def test_rewrite_wiki_link():
     assert rw("[[my-page#heading]]") == "[my-page](/my-page.md#heading)"
     # Page with anchor and custom display
     assert rw("[[my-page#heading|Section Display]]") == "[Section Display](/my-page.md#heading)"
+    # Section names become GitHub-style heading ids: no spaces in the link target
+    assert rw("[[pi5-setup#Setup Steps (v2)]]") == "[pi5-setup](/pi5-setup.md#setup-steps-v2)"
+    assert rw("[[#Known Issues]]") == "[Known Issues](#known-issues)"
     # Same-page anchor
     assert rw("[[#anchor]]") == "[anchor](#anchor)"
     assert rw("[[#anchor|See anchor]]") == "[See anchor](#anchor)"
@@ -760,6 +763,7 @@ def test_transform_frontmatter_okf():
         "type: Runbook\n",
         "summary: How to restore database.\n",
         "stale_after: 2026-12-31\n",
+        "last_updated: 2026-11-01\n",
         'generated: { by: "claude", at: "2026-11-01" }\n',
         "verified:\n",
         "  by: human:jijin\n",
@@ -775,6 +779,7 @@ def test_transform_frontmatter_okf():
     assert "description: How to restore database." in joined
     assert "summary:" not in joined
     assert "stale_after: 2026-12-31T00:00:00Z" in joined
+    assert "last_updated: 2026-11-01T00:00:00Z" in joined
     assert 'at: "2026-11-01T00:00:00Z"' in joined
     assert "at: 2026-11-01T00:00:00Z" in joined
     assert "atoms:\n  - atom 1\n" in joined
@@ -835,19 +840,18 @@ def test_export_okf_bundle_and_cli():
         sub_log = wiki_dir / "log"
         sub_log.mkdir()
         (sub_log / "2026-11.md").write_text("# Log 2026-11\n\n- 2026-11-01: [[page-one]] created.\n")
+        (wiki_dir / "log.md").write_text("# Log\n\n- 2026-11-02: [[page-one]] edited.\n")
 
-        # 1. export_okf_bundle into target dir
+        # 1. export_okf_bundle into target dir: pages and index, never the logs
         out_dir = Path(tmp) / "export"
         bundle = export_okf_bundle(wiki_dir, output_dir=out_dir)
-        assert len(bundle) == 3
-        assert "index.md" in bundle
-        assert "page-one.md" in bundle
-        assert "log/2026-11.md" in bundle
+        assert sorted(bundle) == ["index.md", "page-one.md"], sorted(bundle)
+        assert sorted(p.name for p in out_dir.iterdir()) == ["index.md", "page-one.md"]
 
-        # Files written to disk
-        assert (out_dir / "index.md").exists()
-        assert (out_dir / "page-one.md").exists()
-        assert (out_dir / "log" / "2026-11.md").exists()
+        # CRLF pages still get their frontmatter transformed
+        (wiki_dir / "crlf.md").write_text("---\r\ntitle: C\r\nsummary: S.\r\n---\r\nbody\r\n", newline="")
+        assert "description: S." in export_okf_bundle(wiki_dir)["crlf.md"]
+        (wiki_dir / "crlf.md").unlink()
 
         p1_text = (out_dir / "page-one.md").read_text()
         assert "description: Page one summary." in p1_text
@@ -858,21 +862,25 @@ def test_export_okf_bundle_and_cli():
         wiki_tool.WIKI = wiki_dir
         try:
             cli_out = Path(tmp) / "cli_export"
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
                 rc = cmd_export_okf(argparse.Namespace(output=str(cli_out), json=False))
             assert rc == 0
-            assert "Exported 3 pages" in out.getvalue()
+            assert "Exported 2 pages" in err.getvalue()
             assert (cli_out / "index.md").exists()
 
-            # CLI with --json
+            # --json with an output folder: stdout is still pure JSON
             json_out = io.StringIO()
-            with contextlib.redirect_stdout(json_out):
-                rc = cmd_export_okf(argparse.Namespace(output=None, json=True))
+            with contextlib.redirect_stdout(json_out), contextlib.redirect_stderr(io.StringIO()):
+                rc = cmd_export_okf(argparse.Namespace(output=str(cli_out), json=True))
             assert rc == 0
             data = json.loads(json_out.getvalue())
             assert data["okf_version"] == "0.2"
-            assert data["page_count"] == 3
+            assert data["page_count"] == 2
+
+            # Neither an output folder nor --json is an error
+            with contextlib.redirect_stderr(io.StringIO()):
+                assert cmd_export_okf(argparse.Namespace(output=None, json=False)) == 1
             assert "page-one.md" in data["files"]
         finally:
             wiki_tool.WIKI = saved_wiki

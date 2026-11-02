@@ -32,7 +32,6 @@ lobe-server implements MCP protocol version `2024-11-05` over Streamable HTTP (`
 | `lobe_sections` | `lobe` | | `## Section` headings in `wiki/index.md`. |
 | `lobe_pending` | `lobe` | | Sources in `raw/` that no page cites yet. |
 | `lobe_lint` | `lobe` | `strict` | Check frontmatter, links, orphans, and index drift. Also flags long pages (J) and likely duplicates (K). Lists at most 20 issues per check, and sums up missing sources by folder; run `wikictl lint --all` locally for the full list. |
-| `lobe_export_okf` | `lobe` | | Export the lobe wiki as an Open Knowledge Format (OKF) v0.2 bundle. |
 | `lobe_add_raw` | `lobe`, `filename`, `content` | | Save a source in `raw/`, commit, and push if enabled. |
 | `lobe_read_raw` | `lobe`, `filename` | | Read a source from the raw folder. `filename` is a name, or a path as `lobe_pending` prints it (`raw/sub/notes.md`). |
 | `lobe_read_page` | `lobe`, `slug` | `section`, `start_line`, `end_line` | Read `wiki/<slug>.md`, or only one `## ` section or a line range. Returns `sha` and the page's `lines`; a partial read also lists the page's `sections`. |
@@ -57,7 +56,7 @@ The full specification is in [`openapi.yaml`](../openapi.yaml) (OpenAPI 3.1). Se
 | `GET` | `/api/lobes/{lobe}/sections` | `## Section` headings in `wiki/index.md`. |
 | `GET` | `/api/lobes/{lobe}/pending` | Sources in `raw/` that no page cites. |
 | `GET` | `/api/lobes/{lobe}/lint?strict=true` | Wiki health check (`returncode: 0` when clean). |
-| `GET` | `/api/lobes/{lobe}/export-okf` | Export lobe wiki as an Open Knowledge Format (OKF) v0.2 bundle. |
+| `GET` | `/api/lobes/{lobe}/export-okf` | Export `index.md` and the wiki pages (not the logs) as an Open Knowledge Format (OKF) v0.2 bundle. REST only: there is no MCP tool, since one call would return the whole wiki. |
 | `POST` | `/api/lobes/{lobe}/raw` | Save a source and commit. Body: `{"filename", "content"}`. Returns `409` if the file already exists. |
 | `GET` | `/api/lobes/{lobe}/raw/{filename}` | Read a source. |
 | `GET` | `/api/lobes/{lobe}/pages/{slug}?section=Setup` | Read a page, or one section (`section`) or a line range (`start_line`, `end_line`). |

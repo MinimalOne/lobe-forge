@@ -28,6 +28,7 @@ jobs:
         run: |
           python3 test_forge.py
           python3 server/test_server.py
+          python3 test_wiki_tool.py
 
       - name: Read semantic release version
         id: ver

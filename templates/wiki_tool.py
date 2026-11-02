@@ -147,9 +147,115 @@ def parse_legacy_fields(text: str) -> dict:
     return out
 
 
+# ── Code Masking ─────────────────────────────────────────────────────────────
+
+FENCE_OPEN_RE = re.compile(r"^[ ]{0,3}(`{3,}|~{3,})(.*)$")
+LIST_ITEM_RE = re.compile(r"^[ ]*(?:[*+-]|\d+[.)])[ ]+")
+INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)((?:(?!\n\s*\n).)*?)(?<!`)\1(?!`)", re.DOTALL)
+
+
+def body_start(lines: list[str]) -> int:
+    """Index of the first line after the YAML frontmatter (0 if there is none or it is unclosed)."""
+    if lines and lines[0].rstrip("\r\n") == "---":
+        return next((i + 1 for i in range(1, len(lines)) if lines[i].rstrip("\r\n") == "---"), 0)
+    return 0
+
+
+def code_line_indices(lines: list[str]) -> set[int]:
+    """Return line indices (0-based) of fenced or 4-space indented code blocks, skipping frontmatter."""
+    code_lines: set[int] = set()
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+    in_indent = False
+    in_list = False  # indented lines inside a list item are continuation, not code (CommonMark)
+    prev_blank = True
+
+    for i in range(body_start(lines), len(lines)):
+        raw = lines[i].rstrip("\r\n")
+        if in_fence:
+            code_lines.add(i)
+            # Closing fence: 0-3 leading spaces, matching fence char of length >= fence_len, optional trailing whitespace
+            if re.match(r"^[ ]{0,3}" + re.escape(fence_char) + r"{" + str(fence_len) + r",}[ \t]*$", raw):
+                in_fence = False
+                fence_char = ""
+                fence_len = 0
+            continue
+
+        m = FENCE_OPEN_RE.match(raw)
+        if m:
+            c = m.group(1)[0]
+            flen = len(m.group(1))
+            info = m.group(2)
+            # Backtick fence info string cannot contain backticks
+            if not (c == "`" and "`" in info):
+                in_fence = True
+                fence_char = c
+                fence_len = flen
+                in_indent = False
+                code_lines.add(i)
+                continue
+
+        if not raw.strip():
+            prev_blank = True
+            continue
+
+        if raw.startswith(("    ", "\t")) and not in_list and (in_indent or prev_blank):
+            in_indent = True
+            code_lines.add(i)
+            prev_blank = False
+            continue
+        in_indent = False
+        if LIST_ITEM_RE.match(raw):
+            in_list = True
+        elif prev_blank and not raw.startswith((" ", "\t")):
+            in_list = False  # a new unindented block ends the list; without a blank line it is lazy continuation
+        prev_blank = False
+
+    return code_lines
+
+
+def mask_code(text: str) -> tuple[str, list[str]]:
+    """
+    Replace fenced code blocks, 4-space indented code blocks, and inline code spans
+    with sentinel tokens (\\x00CODE<index>\\x00). Preserves newlines so line counts
+    remain invariant. Returns (masked_text, tokens).
+    """
+    lines = text.splitlines(keepends=True)
+    code_lines = code_line_indices(lines)
+    tokens: list[str] = []
+    out_parts: list[str] = []
+
+    i = 0
+    while i < len(lines):
+        if i in code_lines:
+            start = i
+            while i < len(lines) and i in code_lines:
+                i += 1
+            block = "".join(lines[start:i])
+            tok = f"\x00CODE{len(tokens)}\x00"
+            tokens.append(block)
+            out_parts.append(tok + ("\n" * block.count("\n")))
+        else:
+            out_parts.append(lines[i])
+            i += 1
+
+    intermediate = "".join(out_parts)
+
+    def repl(m: re.Match) -> str:
+        span = m.group(0)
+        tok = f"\x00CODE{len(tokens)}\x00"
+        tokens.append(span)
+        return tok + ("\n" * span.count("\n"))
+
+    masked = INLINE_CODE_RE.sub(repl, intermediate)
+    return masked, tokens
+
+
 def wiki_links_in(text: str) -> list[str]:
-    # Strip pipe aliases ([[page|display]]) and anchors ([[page#section]])
-    raw = re.findall(r"\[\[([^\]]+)\]\]", text)
+    # Strip pipe aliases ([[page|display]]) and anchors ([[page#section]]) after masking code
+    masked, _ = mask_code(text)
+    raw = re.findall(r"\[\[([^\]]+)\]\]", masked)
     pages = []
     for r in raw:
         page = re.split(r"[|#]", r)[0].strip()
@@ -305,12 +411,8 @@ def cmd_lint(args) -> int:
     for name in entries:
         lines = (WIKI / name).read_text().splitlines()
         if len(lines) > max_lines:
-            fenced, n_sec = False, 0
-            for l in lines:
-                if l.lstrip().startswith("```"):
-                    fenced = not fenced
-                elif not fenced and l.startswith("## "):
-                    n_sec += 1
+            code_lines = code_line_indices(lines)
+            n_sec = sum(1 for i in range(body_start(lines), len(lines)) if i not in code_lines and lines[i].startswith("## "))
             issues["J"].append((name, f"{len(lines)} lines, {n_sec} ## section(s): split into a hub page plus sub-pages"))
     issues["J"].sort(key=lambda it: -int(it[1].split()[0]))
 
@@ -492,25 +594,12 @@ def _locate_match(full_text: str, body: str, rx: re.Pattern) -> str:
     """Return a snippet prefixed with [L<start>-<end> ## Section] (1-based file line numbers)."""
     lines = full_text.splitlines()
     n_lines = len(lines)
-    body_start = 0
-    if full_text.startswith("---\n"):
-        try:
-            end_fm = full_text.index("\n---\n", 4)
-            body_start = full_text[: end_fm + 5].count("\n")
-        except ValueError:
-            pass
-    # lines inside ``` fences: "# comment" / "## comment" there are code, not headings
-    code: set[int] = set()
-    fenced = False
-    for i in range(body_start, n_lines):
-        if lines[i].lstrip().startswith("```"):
-            fenced = not fenced
-            code.add(i)
-        elif fenced:
-            code.add(i)
-    h2_indices = [i for i in range(body_start, n_lines) if i not in code and lines[i].startswith("## ")]
-    h1 = next((i for i in range(body_start, n_lines) if i not in code and lines[i].startswith("# ")), None)
-    for idx in range(body_start, n_lines):
+    start = body_start(lines)
+    # lines inside code fences and indented blocks: "# comment" / "## comment" there are code, not headings
+    code = code_line_indices(lines)
+    h2_indices = [i for i in range(start, n_lines) if i not in code and lines[i].startswith("## ")]
+    h1 = next((i for i in range(start, n_lines) if i not in code and lines[i].startswith("# ")), None)
+    for idx in range(start, n_lines):
         if idx == h1:  # the title; cmd_search strips it from body too
             continue
         if rx.search(lines[idx]):
@@ -524,7 +613,7 @@ def _locate_match(full_text: str, body: str, rx: re.Pattern) -> str:
                 else:
                     break
             # neighbouring headings are noise, but keep the matched line even when it is a heading
-            ctx = [lines[j].strip() for j in range(max(body_start, idx - 1), min(n_lines, idx + 2))
+            ctx = [lines[j].strip() for j in range(max(start, idx - 1), min(n_lines, idx + 2))
                    if lines[j].strip() and (j == idx or j in code or not re.match(r"^#+ ", lines[j]))]
             win = " ".join(ctx) if ctx else lines[idx].strip()
             m = rx.search(win)

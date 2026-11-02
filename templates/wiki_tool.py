@@ -154,16 +154,24 @@ LIST_ITEM_RE = re.compile(r"^[ ]*(?:[*+-]|\d+[.)])[ ]+")
 INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)((?:(?!\n\s*\n).)*?)(?<!`)\1(?!`)", re.DOTALL)
 
 
-def code_line_indices(lines: list[str], start_line: int = 0) -> set[int]:
-    """Return line indices (0-based) that belong to fenced or 4-space indented code blocks."""
+def body_start(lines: list[str]) -> int:
+    """Index of the first line after the YAML frontmatter (0 if there is none or it is unclosed)."""
+    if lines and lines[0].rstrip("\r\n") == "---":
+        return next((i + 1 for i in range(1, len(lines)) if lines[i].rstrip("\r\n") == "---"), 0)
+    return 0
+
+
+def code_line_indices(lines: list[str]) -> set[int]:
+    """Return line indices (0-based) of fenced or 4-space indented code blocks, skipping frontmatter."""
     code_lines: set[int] = set()
     in_fence = False
     fence_char = ""
     fence_len = 0
     in_indent = False
+    in_list = False  # indented lines inside a list item are continuation, not code (CommonMark)
     prev_blank = True
 
-    for i in range(start_line, len(lines)):
+    for i in range(body_start(lines), len(lines)):
         raw = lines[i].rstrip("\r\n")
         if in_fence:
             code_lines.add(i)
@@ -192,16 +200,16 @@ def code_line_indices(lines: list[str], start_line: int = 0) -> set[int]:
             prev_blank = True
             continue
 
-        if raw.startswith("    ") or raw.startswith("\t"):
-            if not LIST_ITEM_RE.match(raw) and (in_indent or prev_blank):
-                in_indent = True
-                code_lines.add(i)
-                prev_blank = False
-                continue
-            else:
-                in_indent = False
-        else:
-            in_indent = False
+        if raw.startswith(("    ", "\t")) and not in_list and (in_indent or prev_blank):
+            in_indent = True
+            code_lines.add(i)
+            prev_blank = False
+            continue
+        in_indent = False
+        if LIST_ITEM_RE.match(raw):
+            in_list = True
+        elif prev_blank and not raw.startswith((" ", "\t")):
+            in_list = False  # a new unindented block ends the list; without a blank line it is lazy continuation
         prev_blank = False
 
     return code_lines
@@ -214,14 +222,7 @@ def mask_code(text: str) -> tuple[str, list[str]]:
     remain invariant. Returns (masked_text, tokens).
     """
     lines = text.splitlines(keepends=True)
-    body_start = 0
-    if lines and lines[0].rstrip("\r\n") == "---":
-        for i in range(1, len(lines)):
-            if lines[i].rstrip("\r\n") == "---":
-                body_start = i + 1
-                break
-
-    code_lines = code_line_indices(lines, start_line=body_start)
+    code_lines = code_line_indices(lines)
     tokens: list[str] = []
     out_parts: list[str] = []
 
@@ -249,17 +250,6 @@ def mask_code(text: str) -> tuple[str, list[str]]:
 
     masked = INLINE_CODE_RE.sub(repl, intermediate)
     return masked, tokens
-
-
-def unmask_code(text: str, tokens: list[str]) -> str:
-    """Restore sentinel tokens (\\x00CODE<index>\\x00) with their original code content."""
-    for i, tok in enumerate(tokens):
-        padded = f"\x00CODE{i}\x00" + ("\n" * tok.count("\n"))
-        if padded in text:
-            text = text.replace(padded, tok)
-        else:
-            text = text.replace(f"\x00CODE{i}\x00", tok)
-    return text
 
 
 def wiki_links_in(text: str) -> list[str]:
@@ -421,14 +411,8 @@ def cmd_lint(args) -> int:
     for name in entries:
         lines = (WIKI / name).read_text().splitlines()
         if len(lines) > max_lines:
-            body_start = 0
-            if lines and lines[0].rstrip("\r\n") == "---":
-                for i in range(1, len(lines)):
-                    if lines[i].rstrip("\r\n") == "---":
-                        body_start = i + 1
-                        break
-            code_lines = code_line_indices(lines, start_line=body_start)
-            n_sec = sum(1 for i in range(body_start, len(lines)) if i not in code_lines and lines[i].startswith("## "))
+            code_lines = code_line_indices(lines)
+            n_sec = sum(1 for i in range(body_start(lines), len(lines)) if i not in code_lines and lines[i].startswith("## "))
             issues["J"].append((name, f"{len(lines)} lines, {n_sec} ## section(s): split into a hub page plus sub-pages"))
     issues["J"].sort(key=lambda it: -int(it[1].split()[0]))
 
@@ -610,18 +594,12 @@ def _locate_match(full_text: str, body: str, rx: re.Pattern) -> str:
     """Return a snippet prefixed with [L<start>-<end> ## Section] (1-based file line numbers)."""
     lines = full_text.splitlines()
     n_lines = len(lines)
-    body_start = 0
-    if full_text.startswith("---\n"):
-        try:
-            end_fm = full_text.index("\n---\n", 4)
-            body_start = full_text[: end_fm + 5].count("\n")
-        except ValueError:
-            pass
+    start = body_start(lines)
     # lines inside code fences and indented blocks: "# comment" / "## comment" there are code, not headings
-    code = code_line_indices(lines, start_line=body_start)
-    h2_indices = [i for i in range(body_start, n_lines) if i not in code and lines[i].startswith("## ")]
-    h1 = next((i for i in range(body_start, n_lines) if i not in code and lines[i].startswith("# ")), None)
-    for idx in range(body_start, n_lines):
+    code = code_line_indices(lines)
+    h2_indices = [i for i in range(start, n_lines) if i not in code and lines[i].startswith("## ")]
+    h1 = next((i for i in range(start, n_lines) if i not in code and lines[i].startswith("# ")), None)
+    for idx in range(start, n_lines):
         if idx == h1:  # the title; cmd_search strips it from body too
             continue
         if rx.search(lines[idx]):
@@ -635,7 +613,7 @@ def _locate_match(full_text: str, body: str, rx: re.Pattern) -> str:
                 else:
                     break
             # neighbouring headings are noise, but keep the matched line even when it is a heading
-            ctx = [lines[j].strip() for j in range(max(body_start, idx - 1), min(n_lines, idx + 2))
+            ctx = [lines[j].strip() for j in range(max(start, idx - 1), min(n_lines, idx + 2))
                    if lines[j].strip() and (j == idx or j in code or not re.match(r"^#+ ", lines[j]))]
             win = " ".join(ctx) if ctx else lines[idx].strip()
             m = rx.search(win)

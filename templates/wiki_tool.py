@@ -58,6 +58,47 @@ def _unquote(val: str) -> str:
     return val
 
 
+def _split_flow_items(s: str) -> list[str]:
+    """Split comma-separated key: value pairs inside { ... }, respecting quotes."""
+    pairs, cur, in_quote = [], [], None
+    for ch in s:
+        if in_quote:
+            cur.append(ch)
+            if ch == in_quote:
+                in_quote = None
+        elif ch in ('"', "'"):
+            in_quote = ch
+            cur.append(ch)
+        elif ch == ",":
+            part = "".join(cur).strip()
+            if part:
+                pairs.append(part)
+            cur = []
+        else:
+            cur.append(ch)
+    part = "".join(cur).strip()
+    if part:
+        pairs.append(part)
+    return pairs
+
+
+def _parse_flow_mapping(s: str) -> dict:
+    inner = s.strip()
+    if inner.startswith("{") and inner.endswith("}"):
+        inner = inner[1:-1].strip()
+    result = {}
+    for item in _split_flow_items(inner):
+        if ":" in item:
+            k, _, v = item.partition(":")
+            k = k.strip()
+            v = v.strip()
+            if v.startswith("{") and v.endswith("}"):
+                result[k] = _parse_flow_mapping(v)
+            else:
+                result[k] = _unquote(v)
+    return result
+
+
 def _parse_fm_block(fm_text: str) -> dict:
     """Parse a YAML frontmatter block (no external deps)."""
     result: dict = {}
@@ -75,17 +116,43 @@ def _parse_fm_block(fm_text: str) -> dict:
             if val == "[]":
                 result[key] = []
                 i += 1
+            elif val.startswith("{") and val.endswith("}"):
+                result[key] = _parse_flow_mapping(val)
+                i += 1
             elif val:
                 result[key] = _unquote(val)
                 i += 1
             else:
-                # Collect list items on following lines
-                items = []
+                # Collect sub-block on following lines
                 i += 1
-                while i < len(lines) and lines[i].startswith("  - "):
-                    items.append(_unquote(lines[i][4:]))
+                sub_lines = []
+                while i < len(lines) and (lines[i].startswith("  ") or not lines[i].strip()):
+                    sub_lines.append(lines[i])
                     i += 1
-                result[key] = items
+                has_list_items = any(l.startswith("  - ") for l in sub_lines if l.strip())
+                if has_list_items:
+                    items = []
+                    for l in sub_lines:
+                        if l.startswith("  - "):
+                            item_str = l[4:].strip()
+                            if item_str.startswith("{") and item_str.endswith("}"):
+                                items.append(_parse_flow_mapping(item_str))
+                            else:
+                                items.append(_unquote(item_str))
+                    result[key] = items
+                else:
+                    sub_dict = {}
+                    for l in sub_lines:
+                        sl = l.strip()
+                        if sl and not sl.startswith("#") and ":" in sl:
+                            sk, _, sv = sl.partition(":")
+                            sk = sk.strip()
+                            sv = sv.strip()
+                            if sv.startswith("{") and sv.endswith("}"):
+                                sub_dict[sk] = _parse_flow_mapping(sv)
+                            else:
+                                sub_dict[sk] = _unquote(sv)
+                    result[key] = sub_dict
         else:
             i += 1
     return result
@@ -102,6 +169,97 @@ def parse_frontmatter(text: str) -> tuple[dict | None, str]:
     fm = _parse_fm_block(text[4:end])
     body = text[end + 5:]
     return fm, body
+
+
+def extract_frontmatter_block(text: str, key: str) -> list[str]:
+    """Extract a top-level key and its indented continuation lines from frontmatter."""
+    if not text.startswith("---"):
+        return []
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n") != "---":
+        return []
+    end_fm = -1
+    for i in range(1, len(lines)):
+        if lines[i].rstrip("\r\n") == "---":
+            end_fm = i
+            break
+    if end_fm == -1:
+        return []
+    out = []
+    recording = False
+    for line in lines[1:end_fm]:
+        if line.startswith(f"{key}:"):
+            recording = True
+            out.append(line)
+        elif recording:
+            if line.startswith((" ", "\t")):
+                out.append(line)
+            else:
+                break
+    return out
+
+
+def strip_and_splice_trust_fields(
+    text: str,
+    existing_disk_text: str | None = None,
+    actor: str = "mcp-client",
+    at_iso: str | None = None,
+) -> str:
+    """
+    Server-owned trust fields:
+    - Strip any inbound `generated:` and `verified:` lines from `text`.
+    - Carry forward existing `verified:` block from `existing_disk_text` (if any).
+    - Restamp `generated: { by: "<actor>", at: "<iso_utc>" }`.
+    - Splice cleanly inside `---` delimiters, preserving comments and formatting.
+    """
+    if at_iso is None:
+        at_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    disk_verified = []
+    if existing_disk_text:
+        disk_verified = extract_frontmatter_block(existing_disk_text, "verified")
+
+    if not text.startswith("---"):
+        fm_lines = [f'generated: {{ by: "{actor}", at: "{at_iso}" }}\n']
+        if disk_verified:
+            fm_lines = disk_verified + fm_lines
+        return "---\n" + "".join(fm_lines) + "---\n\n" + text
+
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n") != "---":
+        return text
+    end_fm = -1
+    for i in range(1, len(lines)):
+        if lines[i].rstrip("\r\n") == "---":
+            end_fm = i
+            break
+    if end_fm == -1:
+        return text
+
+    new_fm_lines = []
+    skipping = False
+    for line in lines[1:end_fm]:
+        if line.startswith(("generated:", "verified:")):
+            skipping = True
+            continue
+        elif skipping:
+            if line.startswith((" ", "\t")):
+                continue
+            else:
+                skipping = False
+        new_fm_lines.append(line)
+
+    if disk_verified:
+        new_fm_lines.extend(disk_verified)
+
+    gen_line = f'generated: {{ by: "{actor}", at: "{at_iso}" }}\n'
+    new_fm_lines.append(gen_line)
+
+    formatted_fm = []
+    for l in new_fm_lines:
+        formatted_fm.append(l if l.endswith("\n") else l + "\n")
+
+    return lines[0] + "".join(formatted_fm) + "".join(lines[end_fm:])
 
 
 def _split_top(s: str) -> list[str]:
@@ -948,6 +1106,23 @@ def cmd_set_atoms(args) -> int:
     return 0
 
 
+def cmd_stamp(args) -> int:
+    actor = getattr(args, "by", "local") or "local"
+    rc = 0
+    for page in args.pages:
+        slug = page.removesuffix(".md").removeprefix(f"{WIKI.name}/")
+        path = WIKI / f"{slug}.md"
+        if not path.is_file():
+            print(f"No page '{slug}'.", file=sys.stderr)
+            rc = 1
+            continue
+        text = path.read_text(encoding="utf-8")
+        spliced = strip_and_splice_trust_fields(text, existing_disk_text=text, actor=actor)
+        path.write_text(spliced, encoding="utf-8")
+        print(f"Stamped {path.name} (by: {actor})")
+    return rc
+
+
 def cmd_pending(_args) -> int:
     if not RAW.is_dir():
         print("No pending raw sources.")
@@ -1043,6 +1218,10 @@ def main():
     atoms_p.add_argument("page", help="Page slug or filename")
     atoms_p.add_argument("atoms", nargs="+", help="Concise atoms: 'cmd: ...', 'fix: ...', 'decision: ...', 'fact: ...'")
 
+    stamp_p = sub.add_parser("stamp", help="Restamp generated trust field on one or more wiki pages")
+    stamp_p.add_argument("pages", nargs="+", help="Page slug(s) or filename(s)")
+    stamp_p.add_argument("--by", default="local", help="Actor identity (default: 'local')")
+
     sub.add_parser("pending", help="List raw/ files not cited by any wiki page")
 
     conv_p = sub.add_parser("convert-legacy", help="Convert legacy pages to frontmatter (dry run unless --apply)")
@@ -1055,7 +1234,7 @@ def main():
         sys.exit(cmd_lint(args))
     else:
         sys.exit({"search": cmd_search, "links": cmd_links, "sections": cmd_sections,
-                  "index-add": cmd_index_add, "set-atoms": cmd_set_atoms, "pending": cmd_pending,
+                  "index-add": cmd_index_add, "set-atoms": cmd_set_atoms, "stamp": cmd_stamp, "pending": cmd_pending,
                   "convert-legacy": cmd_convert_legacy, "rotate-log": cmd_rotate_log}[args.command](args))
 
 

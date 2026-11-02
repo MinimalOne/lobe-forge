@@ -45,7 +45,7 @@ if str(ROOT / "scripts") not in sys.path:
 if str(ROOT / "templates") not in sys.path:
     sys.path.insert(0, str(ROOT / "templates"))
 import forge  # noqa: E402
-from wiki_tool import body_start, code_line_indices  # noqa: E402
+from wiki_tool import body_start, code_line_indices, strip_and_splice_trust_fields  # noqa: E402
 
 
 def server_version() -> str:
@@ -534,6 +534,7 @@ def write_page(
     description: str | None = None,
     log_entry: str | None = None,
     expected_sha: str | None = None,
+    actor: str | None = None,
 ) -> dict[str, Any]:
     clean_slug = page_name(slug)
     if not SLUG_RE.match(clean_slug):
@@ -541,7 +542,14 @@ def write_page(
     paths = l_paths(lobe)
     page_file = paths["WIKI"] / f"{clean_slug}.md"
     is_new = not page_file.exists()
-    check_sha(None if is_new else page_file.read_text(encoding="utf-8"), expected_sha)
+    disk_text = None if is_new else page_file.read_text(encoding="utf-8")
+    check_sha(disk_text, expected_sha)
+
+    final_content = strip_and_splice_trust_fields(
+        content,
+        existing_disk_text=disk_text,
+        actor=(actor or "").strip() or "mcp-client",
+    )
 
     staged = [str(page_file.relative_to(paths["REPO"]))]
     if section and description:
@@ -550,7 +558,7 @@ def write_page(
         if idx["returncode"] != 0:  # unknown section: a bad request (400), not a conflict
             raise ValueError((idx["stderr"] or idx["stdout"]).strip())
         staged.append(str((paths["WIKI"] / "index.md").relative_to(paths["REPO"])))
-    page_file.write_text(content, encoding="utf-8")
+    page_file.write_text(final_content, encoding="utf-8")
 
     if log_entry and log_entry.strip():
         log_file = paths["WIKI"] / "log.md"
@@ -564,7 +572,7 @@ def write_page(
 
     action = "create" if is_new else "update"
     git_info = git_commit_and_optional_push(paths["REPO"], f"wiki: {action} {clean_slug}", staged)
-    return {"lobe": lobe, "slug": clean_slug, "created": is_new, "sha": page_sha(content), **git_info}
+    return {"lobe": lobe, "slug": clean_slug, "created": is_new, "sha": page_sha(final_content), **git_info}
 
 
 def apply_edit(text: str, edit: dict[str, Any]) -> str:
@@ -616,6 +624,7 @@ def edit_page(
     log_entry: str | None = None,
     index_section: str | None = None,
     index_description: str | None = None,
+    actor: str | None = None,
 ) -> dict[str, Any]:
     """Apply edits in order to an existing page and commit once; any failing edit aborts all of them."""
     if not isinstance(edits, list) or not edits:
@@ -625,7 +634,7 @@ def edit_page(
     text = page["content"]
     for edit in edits:
         text = apply_edit(text, edit)
-    return write_page(lobe, page["slug"], text, index_section, index_description, log_entry, expected_sha=page["sha"])
+    return write_page(lobe, page["slug"], text, index_section, index_description, log_entry, expected_sha=page["sha"], actor=actor)
 
 
 # ── Part 2: MCP Tool Definitions & JSON-RPC 2.0 Dispatcher ──────────────────
@@ -818,6 +827,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
                 "description": {"type": "string", "description": "Optional <=25-word index description."},
                 "log_entry": {"type": "string", "description": "Optional markdown block to append to wiki/log.md in the same commit."},
                 "expected_sha": {"type": "string", "description": "sha from lobe_read_page; the write fails if the page changed since."},
+                "actor": {"type": "string", "description": "Optional actor identity for generated.by (defaults to 'mcp-client')."},
             },
             "required": ["lobe", "slug", "content"],
         },
@@ -852,6 +862,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
                 "log_entry": {"type": "string", "description": "Optional markdown block to append to wiki/log.md in the same commit."},
                 "index_section": {"type": "string", "description": "With index_description: add the page to this index.md section."},
                 "index_description": {"type": "string", "description": "Optional <=25-word index description."},
+                "actor": {"type": "string", "description": "Optional actor identity for generated.by (defaults to 'mcp-client')."},
             },
             "required": ["lobe", "slug", "edits"],
         },
@@ -917,11 +928,12 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
             description=args.get("description"),
             log_entry=args.get("log_entry"),
             expected_sha=args.get("expected_sha"),
+            actor=args.get("actor"),
         )
     if name == "lobe_edit_page":
         return edit_page(
             args["lobe"], args["slug"], args["edits"], args.get("expected_sha"), args.get("log_entry"),
-            args.get("index_section"), args.get("index_description"),
+            args.get("index_section"), args.get("index_description"), actor=args.get("actor"),
         )
     raise ValueError(f"Unknown MCP tool: {name!r}")
 

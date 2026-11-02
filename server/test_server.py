@@ -838,7 +838,7 @@ Old note.
         page_file = Path(tmp) / "lobes" / "edits" / "wiki" / "pi5-setup.md"
 
         full = app.read_page("edits", "pi5-setup")
-        assert full["content"] == page and full["sha"] == w["sha"] and full["lines"] == len(page.splitlines())
+        assert "generated: { by: \"mcp-client\"" in full["content"] and full["sha"] == w["sha"] and full["lines"] == len(page.splitlines()) + 1
 
         # Section read stops at the next real `## ` heading, not one inside a code fence
         setup = app.read_page("edits", "pi5-setup", section="setup")
@@ -1108,6 +1108,73 @@ Some text in beta.
     assert "Section Alpha" not in sec_beta
 
 
+def test_part7_server_owned_trust_fields() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["LOBES_DIR"] = str(Path(tmp) / "lobes")
+        os.environ.pop("LOBE_GIT_PUSH", None)
+        app.create_lobe("trust", "Trust tests")
+
+        # 1. Write page with faked client trust fields and actor="agent-42"
+        faked_inbound = """---
+title: Trust Test Page
+summary: Testing server trust fields.
+generated: { by: "faked-client", at: "1970-01-01" }
+verified:
+  by: fake-verifier
+  sha: 00000000
+---
+
+# Trust Test Page Body
+"""
+        res1 = app.write_page("trust", "trust-page", faked_inbound, section="General", description="Trust page.", actor="agent-42")
+        read1 = app.read_page("trust", "trust-page")
+
+        # Returned sha must match read_page sha (the file on disk)
+        assert res1["sha"] == read1["sha"]
+        assert "fake-verifier" not in read1["content"]
+        assert "faked-client" not in read1["content"]
+        assert 'generated: { by: "agent-42"' in read1["content"]
+
+        # 2. Simulate human verification on disk
+        page_file = Path(tmp) / "lobes" / "trust" / "wiki" / "trust-page.md"
+        content_with_verified = read1["content"].replace(
+            "summary: Testing server trust fields.\n",
+            'summary: Testing server trust fields.\nverified: { by: "human:jijin", at: "2026-11-02T19:00:00Z", sha: "abc123" }\n',
+        )
+        page_file.write_text(content_with_verified, encoding="utf-8")
+        app.git(page_file.parents[1], "commit", "-qam", "human: verify trust-page")
+
+        read_verified = app.read_page("trust", "trust-page")
+        assert 'verified: { by: "human:jijin"' in read_verified["content"]
+
+        # 3. Agent edits the page using edit_page: existing verified must be carried over!
+        res2 = app.edit_page(
+            "trust",
+            "trust-page",
+            [{"op": "append", "content": "Follow-up paragraph."}],
+            expected_sha=read_verified["sha"],
+            actor="agent-43",
+        )
+        read2 = app.read_page("trust", "trust-page")
+        assert res2["sha"] == read2["sha"]
+        assert 'verified: { by: "human:jijin"' in read2["content"]
+        assert 'generated: { by: "agent-43"' in read2["content"]
+        assert "Follow-up paragraph." in read2["content"]
+
+        # 4. Agent attempts another write with expected_sha from res2 -> succeeds immediately!
+        res3 = app.write_page(
+            "trust",
+            "trust-page",
+            read2["content"] + "\nMore notes.\n",
+            expected_sha=res2["sha"],
+        )
+        read3 = app.read_page("trust", "trust-page")
+        assert res3["sha"] == read3["sha"]
+        assert 'generated: { by: "mcp-client"' in read3["content"]
+        assert 'verified: { by: "human:jijin"' in read3["content"]
+        assert "More notes." in read3["content"]
+
+
 if __name__ == "__main__":
     test_part1_core_and_git_scenarios()
     print("OK: Part 1 core & Git E2E scenarios passed")
@@ -1121,3 +1188,5 @@ if __name__ == "__main__":
     print("OK: Part 5 partial reads, edits & write lock passed")
     test_part6_h2_spans_and_masker()
     print("OK: Part 6 h2_spans & code masker passed")
+    test_part7_server_owned_trust_fields()
+    print("OK: Part 7 server-owned trust fields passed")

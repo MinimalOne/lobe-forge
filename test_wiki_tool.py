@@ -7,7 +7,15 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 if str(TEMPLATES_DIR) not in sys.path:
     sys.path.insert(0, str(TEMPLATES_DIR))
 
-from wiki_tool import body_start, code_line_indices, mask_code, wiki_links_in
+from wiki_tool import (
+    body_start,
+    cmd_stamp,
+    code_line_indices,
+    mask_code,
+    parse_frontmatter,
+    strip_and_splice_trust_fields,
+    wiki_links_in,
+)
 
 
 def test_code_line_indices_fences():
@@ -175,6 +183,92 @@ Indented block:
     ], f"Unexpected links: {links}"
 
 
+def test_flow_mapping_parser():
+    fm_text = """---
+title: Parser Test
+generated: { by: "claude-code", at: "2026-11-02T18:00:00Z" }
+comma_val: { by: "user, with comma", at: "2026-11-02" }
+verified_flow_list:
+  - { by: "human:alice", at: "2026-11-02", sha: "sha1" }
+  - { by: "human:bob", at: "2026-11-03", sha: "sha2" }
+verified_block:
+  by: "human:charlie"
+  sha: "sha3"
+atoms:
+  - "decision: ok"
+---
+Body text.
+"""
+    parsed, body = parse_frontmatter(fm_text)
+    assert parsed is not None
+    assert parsed["title"] == "Parser Test"
+    assert parsed["generated"] == {"by": "claude-code", "at": "2026-11-02T18:00:00Z"}
+    assert parsed["comma_val"] == {"by": "user, with comma", "at": "2026-11-02"}
+    assert parsed["verified_flow_list"] == [
+        {"by": "human:alice", "at": "2026-11-02", "sha": "sha1"},
+        {"by": "human:bob", "at": "2026-11-03", "sha": "sha2"},
+    ]
+    assert parsed["verified_block"] == {"by": "human:charlie", "sha": "sha3"}
+    assert parsed["atoms"] == ["decision: ok"]
+    assert body.strip() == "Body text."
+
+
+def test_strip_and_splice_trust_fields():
+    client_inbound = """---
+title: Inbound Doc
+# Existing comment
+atoms:
+  - "fact: testing"
+generated: { by: "faked-client", at: "1970-01-01T00:00:00Z" }
+verified:
+  by: fake-verifier
+  sha: 000000
+---
+
+# Body
+"""
+    existing_disk = """---
+title: Inbound Doc
+verified: { by: "human:jijin", at: "2026-11-01T12:00:00Z", sha: "abc123" }
+---
+"""
+    spliced = strip_and_splice_trust_fields(
+        client_inbound,
+        existing_disk_text=existing_disk,
+        actor="antigravity",
+        at_iso="2026-11-02T19:00:00Z",
+    )
+    assert 'generated: { by: "antigravity", at: "2026-11-02T19:00:00Z" }' in spliced
+    assert 'verified: { by: "human:jijin", at: "2026-11-01T12:00:00Z", sha: "abc123" }' in spliced
+    assert "fake-verifier" not in spliced
+    assert "faked-client" not in spliced
+    assert "# Existing comment" in spliced
+    assert 'atoms:\n  - "fact: testing"' in spliced
+
+
+def test_cmd_stamp(tmp_path, monkeypatch):
+    import argparse
+    import wiki_tool
+
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    page_file = wiki_dir / "my-page.md"
+    page_file.write_text("""---
+title: My Page
+verified: { by: "human:jijin", at: "2026-11-01", sha: "111" }
+---
+
+# Content
+""")
+    monkeypatch.setattr(wiki_tool, "WIKI", wiki_dir)
+    args = argparse.Namespace(pages=["my-page"], by="test-local")
+    rc = cmd_stamp(args)
+    assert rc == 0
+    updated = page_file.read_text()
+    assert 'verified: { by: "human:jijin", at: "2026-11-01", sha: "111" }' in updated
+    assert 'generated: { by: "test-local"' in updated
+
+
 if __name__ == "__main__":
     test_code_line_indices_fences()
     test_code_line_indices_indented_blocks_and_lists()
@@ -182,4 +276,6 @@ if __name__ == "__main__":
     test_body_start()
     test_wiki_links_in_list_continuation()
     test_wiki_links_in_ignores_code()
+    test_flow_mapping_parser()
+    test_strip_and_splice_trust_fields()
     print("All wiki_tool masker tests passed!")

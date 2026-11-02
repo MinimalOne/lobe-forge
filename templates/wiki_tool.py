@@ -58,6 +58,42 @@ def _unquote(val: str) -> str:
     return val
 
 
+def _split_flow_items(s: str) -> list[str]:
+    """Split comma-separated key: value pairs inside { ... }, respecting quotes."""
+    pairs, cur, in_quote = [], [], None
+    for ch in s:
+        if in_quote:
+            cur.append(ch)
+            if ch == in_quote:
+                in_quote = None
+        elif ch in ('"', "'"):
+            in_quote = ch
+            cur.append(ch)
+        elif ch == ",":
+            part = "".join(cur).strip()
+            if part:
+                pairs.append(part)
+            cur = []
+        else:
+            cur.append(ch)
+    part = "".join(cur).strip()
+    if part:
+        pairs.append(part)
+    return pairs
+
+
+def _parse_flow_mapping(s: str) -> dict:
+    inner = s.strip()
+    if inner.startswith("{") and inner.endswith("}"):
+        inner = inner[1:-1].strip()
+    result = {}
+    for item in _split_flow_items(inner):
+        if ":" in item:
+            k, _, v = item.partition(":")
+            result[k.strip()] = _unquote(v)  # flat only: trust fields never nest
+    return result
+
+
 def _parse_fm_block(fm_text: str) -> dict:
     """Parse a YAML frontmatter block (no external deps)."""
     result: dict = {}
@@ -75,17 +111,43 @@ def _parse_fm_block(fm_text: str) -> dict:
             if val == "[]":
                 result[key] = []
                 i += 1
+            elif val.startswith("{") and val.endswith("}"):
+                result[key] = _parse_flow_mapping(val)
+                i += 1
             elif val:
                 result[key] = _unquote(val)
                 i += 1
             else:
-                # Collect list items on following lines
-                items = []
+                # Collect sub-block on following lines
                 i += 1
-                while i < len(lines) and lines[i].startswith("  - "):
-                    items.append(_unquote(lines[i][4:]))
+                sub_lines = []
+                while i < len(lines) and (lines[i].startswith("  ") or not lines[i].strip()):
+                    sub_lines.append(lines[i])
                     i += 1
-                result[key] = items
+                has_list_items = any(l.startswith("  - ") for l in sub_lines if l.strip())
+                if has_list_items:
+                    items = []
+                    for l in sub_lines:
+                        if l.startswith("  - "):
+                            item_str = l[4:].strip()
+                            if item_str.startswith("{") and item_str.endswith("}"):
+                                items.append(_parse_flow_mapping(item_str))
+                            else:
+                                items.append(_unquote(item_str))
+                    result[key] = items
+                else:
+                    sub_dict = {}
+                    for l in sub_lines:
+                        sl = l.strip()
+                        if sl and not sl.startswith("#") and ":" in sl:
+                            sk, _, sv = sl.partition(":")
+                            sk = sk.strip()
+                            sv = sv.strip()
+                            if sv.startswith("{") and sv.endswith("}"):
+                                sub_dict[sk] = _parse_flow_mapping(sv)
+                            else:
+                                sub_dict[sk] = _unquote(sv)
+                    result[key] = sub_dict or []  # an empty `key:` stays a list, as before
         else:
             i += 1
     return result
@@ -102,6 +164,81 @@ def parse_frontmatter(text: str) -> tuple[dict | None, str]:
     fm = _parse_fm_block(text[4:end])
     body = text[end + 5:]
     return fm, body
+
+
+TRUST_KEYS = ("generated", "verified")
+ACTOR_RE = re.compile(r"^[\w.@:-]{1,64}$")
+
+
+def _split_trust(fm_lines: list[str]) -> tuple[list[str], list[str]]:
+    """Split frontmatter lines into (other lines, `verified:` block lines); `generated:` is dropped.
+    Keys are matched the way _parse_fm_block reads them (`verified :`, `'verified':` included)."""
+    kept: list[str] = []
+    verified: list[str] = []
+    current = None
+    for line in fm_lines:
+        if current and line.startswith((" ", "\t")):
+            if current == "verified":
+                verified.append(line)
+            continue
+        key = line.split(":", 1)[0].strip().strip("'\"") if ":" in line and not line.startswith((" ", "\t", "#")) else None
+        current = key if key in TRUST_KEYS else None
+        if current == "verified":
+            verified.append(line)
+        elif not current:
+            kept.append(line)
+    return kept, verified
+
+
+def _frontmatter_end(lines: list[str]) -> int:
+    """body_start(), but an opening `---` with no closing line is an error, not a page without frontmatter."""
+    start = body_start(lines)
+    if not start and lines and lines[0].rstrip("\r\n") == "---":
+        raise ValueError("Frontmatter has no closing '---' line")
+    return start
+
+
+def strip_trust_fields(text: str) -> str:
+    """The page with `generated:` and `verified:` removed from its frontmatter."""
+    lines = text.splitlines(keepends=True)
+    start = body_start(lines)
+    if not start:
+        return text
+    return lines[0] + "".join(_split_trust(lines[1:start - 1])[0]) + "".join(lines[start - 1:])
+
+
+def strip_and_splice_trust_fields(
+    text: str,
+    existing_disk_text: str | None = None,
+    actor: str = "mcp-client",
+    at_iso: str | None = None,
+) -> str:
+    """
+    Server-owned trust fields:
+    - Strip any inbound `generated:` and `verified:` blocks from `text`.
+    - Carry forward the `verified:` block from `existing_disk_text` (if any).
+    - Restamp `generated: { by: "<actor>", at: "<iso_utc>" }`.
+    Raises ValueError for an actor that is not a plain identifier or unclosed frontmatter.
+    """
+    if not ACTOR_RE.match(actor):
+        raise ValueError(f"Invalid actor {actor!r}: use 1-64 letters, digits or . _ @ : -")
+    if at_iso is None:
+        at_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    disk_verified: list[str] = []
+    if existing_disk_text:
+        disk_lines = existing_disk_text.splitlines(keepends=True)
+        disk_start = body_start(disk_lines)
+        if disk_start:
+            disk_verified = _split_trust(disk_lines[1:disk_start - 1])[1]
+    gen_line = f'generated: {{ by: "{actor}", at: "{at_iso}" }}\n'
+
+    lines = text.splitlines(keepends=True)
+    start = _frontmatter_end(lines)
+    if not start:
+        return "---\n" + "".join(disk_verified) + gen_line + "---\n\n" + text
+    kept = _split_trust(lines[1:start - 1])[0]
+    return lines[0] + "".join(kept + disk_verified) + gen_line + "".join(lines[start - 1:])
 
 
 def _split_top(s: str) -> list[str]:
@@ -757,9 +894,14 @@ def cmd_search(args) -> int:
     return 0
 
 
+def _page_slug(arg: str) -> str:
+    """`wiki/foo.md`, `foo.md` or `foo` -> `foo`."""
+    return arg.removesuffix(".md").removeprefix(f"{WIKI.name}/")
+
+
 def cmd_links(args) -> int:
     entries = {p.stem: parse_page(p) for p in _content_pages()}
-    slug = args.page.removesuffix(".md").removeprefix(f"{WIKI.name}/")
+    slug = _page_slug(args.page)
     if slug not in entries:
         print(f"No page '{slug}'. Try: wiki_tool.py search {slug}", file=sys.stderr)
         return 1
@@ -899,7 +1041,7 @@ def convert_legacy(text: str) -> tuple[str | None, str]:
 
 
 def cmd_set_atoms(args) -> int:
-    slug = args.page.removesuffix(".md").removeprefix(f"{WIKI.name}/")
+    slug = _page_slug(args.page)
     path = WIKI / f"{slug}.md"
     if not path.is_file():
         print(f"No page '{slug}'.", file=sys.stderr)
@@ -946,6 +1088,26 @@ def cmd_set_atoms(args) -> int:
     path.write_text("---\n" + "\n".join(cleaned) + "\n---\n" + body)
     print(f"Set {len(atoms_block) - 1} atom(s) on {path.name}")
     return 0
+
+
+def cmd_stamp(args) -> int:
+    rc = 0
+    for page in args.pages:
+        path = WIKI / f"{_page_slug(page)}.md"
+        if not path.is_file():
+            print(f"No page '{path.stem}'.", file=sys.stderr)
+            rc = 1
+            continue
+        text = path.read_text(encoding="utf-8")
+        try:
+            spliced = strip_and_splice_trust_fields(text, existing_disk_text=text, actor=args.by)
+        except ValueError as e:
+            print(f"{path.name}: {e}", file=sys.stderr)
+            rc = 1
+            continue
+        path.write_text(spliced, encoding="utf-8")
+        print(f"Stamped {path.name} (by: {args.by})")
+    return rc
 
 
 def cmd_pending(_args) -> int:
@@ -1043,6 +1205,10 @@ def main():
     atoms_p.add_argument("page", help="Page slug or filename")
     atoms_p.add_argument("atoms", nargs="+", help="Concise atoms: 'cmd: ...', 'fix: ...', 'decision: ...', 'fact: ...'")
 
+    stamp_p = sub.add_parser("stamp", help="Restamp generated trust field on one or more wiki pages")
+    stamp_p.add_argument("pages", nargs="+", help="Page slug(s) or filename(s)")
+    stamp_p.add_argument("--by", default="local", help="Actor identity (default: 'local')")
+
     sub.add_parser("pending", help="List raw/ files not cited by any wiki page")
 
     conv_p = sub.add_parser("convert-legacy", help="Convert legacy pages to frontmatter (dry run unless --apply)")
@@ -1055,7 +1221,7 @@ def main():
         sys.exit(cmd_lint(args))
     else:
         sys.exit({"search": cmd_search, "links": cmd_links, "sections": cmd_sections,
-                  "index-add": cmd_index_add, "set-atoms": cmd_set_atoms, "pending": cmd_pending,
+                  "index-add": cmd_index_add, "set-atoms": cmd_set_atoms, "stamp": cmd_stamp, "pending": cmd_pending,
                   "convert-legacy": cmd_convert_legacy, "rotate-log": cmd_rotate_log}[args.command](args))
 
 

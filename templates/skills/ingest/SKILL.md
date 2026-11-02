@@ -108,6 +108,7 @@ close to its wording; no filler; keep claims scoped (who said it, when, where); 
 
 ```bash
 W="$(builtin cd -P "${SKILL_BASE_DIR}/../.." && pwd)/wikictl"; eval "$("$W" paths)"   # sets LOBE, REPO, WIKI, RAW
+"$W" stamp <each page created or edited>
 "$W" sections
 "$W" index-add --section "<Section>" --page <page> --description "<≤25 words>"   # per new page
 cat >> "$WIKI/log.md" <<'LOG'

@@ -777,6 +777,9 @@ components:
         expected_sha:
           type: string
           description: '`sha` from a read; the write fails with 409 if the page changed since'
+        actor:
+          type: string
+          description: Optional actor identity for generated.by (defaults to 'mcp-client')
 
     PageEdit:
       type: object
@@ -820,6 +823,9 @@ components:
         index_description:
           type: string
           description: Optional <=25-word description for `wiki/index.md`
+        actor:
+          type: string
+          description: Optional actor identity for generated.by (defaults to 'mcp-client')
 
     WritePageResponse:
       allOf:

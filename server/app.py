@@ -42,7 +42,10 @@ def serialized(fn):
 
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
+if str(ROOT / "templates") not in sys.path:
+    sys.path.insert(0, str(ROOT / "templates"))
 import forge  # noqa: E402
+from wiki_tool import code_line_indices, mask_code, unmask_code  # noqa: E402
 
 
 def server_version() -> str:
@@ -458,16 +461,12 @@ def page_sha(text: str) -> str:
 
 
 def h2_spans(lines: list[str]) -> list[tuple[str, int, int]]:
-    """(heading text, heading index, end index exclusive) for each `## ` heading outside frontmatter and ``` fences."""
+    """(heading text, heading index, end index exclusive) for each `## ` heading outside frontmatter and code blocks."""
     start = 0
     if lines and lines[0].rstrip("\r\n") == "---":
         start = next((i + 1 for i in range(1, len(lines)) if lines[i].rstrip("\r\n") == "---"), 0)
-    heads, fenced = [], False
-    for i in range(start, len(lines)):
-        if lines[i].lstrip().startswith("```"):
-            fenced = not fenced
-        elif not fenced and lines[i].startswith("## "):
-            heads.append(i)
+    code_lines = code_line_indices(lines, start_line=start)
+    heads = [i for i in range(start, len(lines)) if i not in code_lines and lines[i].startswith("## ")]
     return [(lines[h][3:].strip(), h, e) for h, e in zip(heads, heads[1:] + [len(lines)])]
 
 

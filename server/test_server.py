@@ -1053,6 +1053,61 @@ Old note.
         srv.server_close()
 
 
+def test_part6_h2_spans_and_masker() -> None:
+    text = """---
+title: Test Headings
+---
+
+# Title
+
+## Section Alpha
+
+Some text in alpha.
+
+```python
+## Not A Heading in backticks
+print("hello")
+```
+
+~~~markdown
+## Not A Heading in tildes
+```python
+nested fence
+```
+~~~
+
+````
+## Not A Heading in 4-backtick fence
+```
+inner
+```
+````
+
+    ## Not A Heading in 4-space indent
+    code = 1
+
+## Section Beta
+
+Some text in beta.
+"""
+    lines = text.splitlines(keepends=True)
+    spans = app.h2_spans(lines)
+    assert len(spans) == 2, f"Expected 2 spans, got {spans}"
+    assert spans[0][0] == "Section Alpha", spans[0]
+    assert spans[1][0] == "Section Beta", spans[1]
+
+    s, e = app.section_span(lines, "Section Alpha")
+    sec_alpha = "".join(lines[s:e])
+    assert "Section Alpha" in sec_alpha
+    assert "Section Beta" not in sec_alpha
+    assert "Not A Heading in backticks" in sec_alpha
+
+    s, e = app.section_span(lines, "Section Beta")
+    sec_beta = "".join(lines[s:e])
+    assert "Section Beta" in sec_beta
+    assert "Section Alpha" not in sec_beta
+
+
 if __name__ == "__main__":
     test_part1_core_and_git_scenarios()
     print("OK: Part 1 core & Git E2E scenarios passed")
@@ -1064,3 +1119,5 @@ if __name__ == "__main__":
     print("OK: Part 4 OAuth resource server passed")
     test_part5_partial_reads_edits_and_write_lock()
     print("OK: Part 5 partial reads, edits & write lock passed")
+    test_part6_h2_spans_and_masker()
+    print("OK: Part 6 h2_spans & code masker passed")

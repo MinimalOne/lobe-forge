@@ -1473,6 +1473,72 @@ def test_part9_page_types_and_lifecycle() -> None:
         assert dirty.stdout.strip() == "", dirty.stdout
 
 
+def test_part10_export_okf() -> None:
+    """Test Part 10: OKF v0.2 bundle export via the REST endpoint (no MCP tool)."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        token = "test-export-token-12345"
+        os.environ["LOBES_DIR"] = tmp_dir
+        os.environ["LOBE_API_TOKEN"] = token
+        os.environ.pop("LOBE_HUMAN_TOKEN", None)
+        os.environ.pop("LOBE_OAUTH_ISSUER", None)
+
+        # 1. Create a lobe
+        app.create_lobe("okflobe", "OKF export test lobe")
+
+        # 2. Write a page with frontmatter, wiki links, anchors, and code blocks
+        page_content = """---
+title: Export Runbook
+type: Runbook
+summary: Backup operations guide.
+stale_after: 2026-12-31
+atoms:
+  - "cmd: backup.sh"
+aliases:
+  - backup-ops
+---
+
+# Export Runbook
+
+See [[cluster-setup|Cluster Setup]] and [[index#overview]].
+
+```bash
+# Code block should preserve inner links
+echo "[[not-a-link]]"
+```
+
+Inline `[[inline-code]]` check.
+"""
+        app.write_page("okflobe", "export-runbook", page_content, section="General", description="Backup operations")
+
+        # 3. The export is REST only: an agent cannot pull the whole wiki in one MCP call
+        rpc = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
+        _, tools = app.dispatch_http("POST", "/mcp", rpc, f"Bearer {token}")
+        assert "lobe_export_okf" not in {t["name"] for t in tools["result"]["tools"]}
+        status, res = app.dispatch_http("GET", "/api/lobes/okflobe/export-okf", b"", f"Bearer {token}")
+        assert status == 200 and res["lobe"] == "okflobe"
+        assert res["okf_version"] == "0.2"
+        assert res["page_count"] >= 2
+        assert "index.md" in res["files"]
+        assert "export-runbook.md" in res["files"]
+        assert "log.md" not in res["files"], sorted(res["files"])
+
+        rb = res["files"]["export-runbook.md"]
+        assert "description: Backup operations guide." in rb
+        assert "summary:" not in rb
+        assert "stale_after: 2026-12-31T00:00:00Z" in rb
+        assert "[Cluster Setup](/cluster-setup.md)" in rb
+        assert "[index](/index.md#overview)" in rb
+        assert "last_updated: " not in rb or "T00:00:00Z" in rb
+        assert 'echo "[[not-a-link]]"' in rb
+        assert "`[[inline-code]]`" in rb
+
+        idx = res["files"]["index.md"]
+        assert 'okf_version: "0.2"' in idx
+
+        # 4. The endpoint needs auth like every other route
+        assert app.dispatch_http("GET", "/api/lobes/okflobe/export-okf", b"")[0] == 401
+
+
 if __name__ == "__main__":
     test_part1_core_and_git_scenarios()
     print("OK: Part 1 core & Git E2E scenarios passed")
@@ -1492,3 +1558,5 @@ if __name__ == "__main__":
     print("OK: Part 8 verification channel and auth passed")
     test_part9_page_types_and_lifecycle()
     print("OK: Part 9 page types and lifecycle passed")
+    test_part10_export_okf()
+    print("OK: Part 10 OKF v0.2 export passed")

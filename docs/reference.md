@@ -18,7 +18,7 @@
 
 ## MCP tools
 
-lobe-server implements MCP protocol version `2025-06-18` over Streamable HTTP (`POST /mcp`) and stdio (`--stdio`).
+lobe-server implements MCP protocol version `2024-11-05` over Streamable HTTP (`POST /mcp`) and stdio (`--stdio`).
 
 | Tool | Required | Optional | Description |
 | :--- | :--- | :--- | :--- |
@@ -56,11 +56,14 @@ The full specification is in [`openapi.yaml`](../openapi.yaml) (OpenAPI 3.1). Se
 | `GET` | `/api/lobes/{lobe}/sections` | `## Section` headings in `wiki/index.md`. |
 | `GET` | `/api/lobes/{lobe}/pending` | Sources in `raw/` that no page cites. |
 | `GET` | `/api/lobes/{lobe}/lint?strict=true` | Wiki health check (`returncode: 0` when clean). |
+| `GET` | `/api/lobes/{lobe}/export-okf` | Export `index.md` and the wiki pages (not the logs) as an Open Knowledge Format (OKF) v0.2 bundle. REST only: there is no MCP tool, since one call would return the whole wiki. |
 | `POST` | `/api/lobes/{lobe}/raw` | Save a source and commit. Body: `{"filename", "content"}`. Returns `409` if the file already exists. |
 | `GET` | `/api/lobes/{lobe}/raw/{filename}` | Read a source. |
 | `GET` | `/api/lobes/{lobe}/pages/{slug}?section=Setup` | Read a page, or one section (`section`) or a line range (`start_line`, `end_line`). |
 | `PUT` | `/api/lobes/{lobe}/pages/{slug}` | Write a page; optional `section` + `description` add it to the index, `log_entry` appends to the log, `expected_sha` refuses a stale write with `409`. |
 | `PATCH` | `/api/lobes/{lobe}/pages/{slug}` | Edit part of a page. Body: `{"edits": [...], "expected_sha?", "log_entry?", "index_section?", "index_description?"}`. Returns `409` if the page changed since `expected_sha`. |
+| `GET` | `/api/lobes/{lobe}/pages/{slug}/verify` | Page verification status and page content hash (or HTML form with `Accept: text/html`). |
+| `POST` | `/api/lobes/{lobe}/pages/{slug}/verify` | Verify page content. Requires human authentication and `expected_hash`. |
 | `POST` | `/mcp` | MCP JSON-RPC 2.0 endpoint (Streamable HTTP). |
 
 ### Examples

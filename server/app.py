@@ -50,6 +50,8 @@ import forge  # noqa: E402
 from wiki_tool import (  # noqa: E402
     body_start,
     code_line_indices,
+    OKF_VERSION,
+    export_okf_bundle,
     human_actor,
     page_hash,
     parse_frontmatter,
@@ -689,6 +691,18 @@ def verify_page(
     }
 
 
+def export_okf(lobe: str) -> dict[str, Any]:
+    """Whole-wiki export for REST callers. Not an MCP tool: one call would fill an agent's context."""
+    paths = l_paths(lobe)
+    exported = export_okf_bundle(paths["WIKI"])
+    return {
+        "lobe": lobe,
+        "okf_version": OKF_VERSION,
+        "page_count": len(exported),
+        "files": exported,
+    }
+
+
 # ── Part 2: MCP Tool Definitions & JSON-RPC 2.0 Dispatcher ──────────────────
 
 MCP_TOOLS: list[dict[str, Any]] = [
@@ -1290,6 +1304,9 @@ def dispatch_http(
         # /api/lobes/{lobe}/...
         if len(parts) >= 4 and parts[0] == "api" and parts[1] == "lobes":
             lobe, sub, n = parts[2], parts[3], len(parts)
+
+            if method == "GET" and sub == "export-okf" and n == 4:
+                return 200, export_okf(lobe)
 
             # Verification endpoint: /api/lobes/{lobe}/pages/{slug}/verify
             if is_verify:

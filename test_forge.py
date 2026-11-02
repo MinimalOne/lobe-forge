@@ -59,7 +59,7 @@ with tempfile.TemporaryDirectory() as d:
     assert r.stdout.splitlines() == [f"{rp}|{rp}/wiki|{rp}/raw", "General", "rc=0"], r.stdout + r.stderr
 
     # lint caps each check at --limit lines and explains a systematic missing-source gap per folder
-    page = "---\ntitle: P{i}\nsummary: s\natoms:\n  - \"fact: x\"\nsources:\n  - raw/docs/a{i}.md\nsource_count: 1\nlast_updated: 2026-11-01\n---\n\n# P{i}\n"
+    page = "---\ntitle: P{i}\ntype: Note\nsummary: s\natoms:\n  - \"fact: x\"\nsources:\n  - raw/docs/a{i}.md\nsource_count: 1\nlast_updated: 2026-11-01\n---\n\n# P{i}\n"
     for i in range(30):
         (repo / "wiki" / f"p{i}.md").write_text(page.format(i=i))
     r = sh(f'"{repo}/wikictl" lint --strict')
@@ -202,9 +202,9 @@ with tempfile.TemporaryDirectory() as d:
     assert "Converted 2 page(s); 1 skipped" in r.stdout, r.stdout
     assert (own / "llmwiki" / "nohead.md").read_text() == nohead
     new = (own / "llmwiki" / "mixed.md").read_text()
-    assert new.startswith('---\ntitle: "Mixed; Page"\nsummary: "Uses \\"quotes\\" and a \\\\ backslash."\n'), new
+    assert new.startswith('---\ntitle: "Mixed; Page"\ntype: Note\nsummary: "Uses \\"quotes\\" and a \\\\ backslash."\n'), new
     assert new.endswith("---\n\n# Mixed; Page\n\n## Body\n\nKeep [[old-page]] text.\n"), new
-    assert (own / "llmwiki" / "old-page.md").read_text().startswith("---\ntitle: \"Old Page\"\n")
+    assert (own / "llmwiki" / "old-page.md").read_text().startswith("---\ntitle: \"Old Page\"\ntype: Note\n")
     (own / "llmwiki" / "nohead.md").unlink()
     r = sh(f'"{own}/wikictl" build && "{own}/wikictl" lint --strict && "{own}/wikictl" search quotes')
     assert r.returncode == 0 and "2 with frontmatter, 0 legacy" in r.stdout and "[[mixed]]" in r.stdout, r.stdout
@@ -298,7 +298,7 @@ with tempfile.TemporaryDirectory() as d:
 
     # search reports total line count and 1-based [L<start>-<end> ## Section] range on body matches
     r_loc = sh(f'"{own}/wikictl" search "old-page"')
-    assert "lines=19 — Mixed; Page" in r_loc.stdout and "[L17-19 ## Body] Keep [[old-page]] text." in r_loc.stdout, r_loc.stdout
+    assert "lines=20 — Mixed; Page" in r_loc.stdout and "[L18-20 ## Body] Keep [[old-page]] text." in r_loc.stdout, r_loc.stdout
     # a match on a heading line keeps that heading in the snippet
     (own / "llmwiki" / "heads.md").write_text(
         '---\ntitle: "Heads"\nsummary: "S."\nsources: []\nsource_count: 0\nprovenance:\n  - "chat"\n'

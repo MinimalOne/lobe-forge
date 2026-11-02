@@ -17,6 +17,11 @@ services:
       - LOBE_OAUTH_CLIENT_ID=${LOBE_OAUTH_CLIENT_ID:-}
       - LOBE_OAUTH_CLIENT_SECRET=${LOBE_OAUTH_CLIENT_SECRET:-}
       - LOBE_PUBLIC_URL=${LOBE_PUBLIC_URL:-}
+      # Human page verification (POST /api/lobes/{lobe}/pages/{slug}/verify); the agent token cannot verify
+      - LOBE_HUMAN_TOKEN=${LOBE_HUMAN_TOKEN:-}
+      - LOBE_HUMAN_CLIENT_ID=${LOBE_HUMAN_CLIENT_ID:-}
+      # keep the default: an empty value turns the scope check off
+      - LOBE_HUMAN_SCOPE=${LOBE_HUMAN_SCOPE:-lobe:verify}
     volumes:
       - lobes_data:/data/lobes
 

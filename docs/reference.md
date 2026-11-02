@@ -9,9 +9,12 @@
 | `LOBE_PORT` | `8080` | HTTP port (`--port` overrides it). |
 | `LOBE_API_TOKEN` | *(unset)* | Bearer token for `/api/*` and `/mcp`. If both this and `LOBE_OAUTH_ISSUER` are unset, authentication is off, and the HTTP server then only starts on a loopback address (`127.0.0.1`, `localhost`, `::1`). `/health` is always public. |
 | `LOBE_OAUTH_ISSUER` | *(unset)* | Issuer URL of your OAuth provider, for example `https://auth.example.com/application/o/lobe-server/`. Turns on OAuth for Claude.ai and the Claude mobile app. `LOBE_API_TOKEN` keeps working. |
-| `LOBE_OAUTH_CLIENT_ID` | *(unset)* | OAuth client ID. Used for token introspection; tokens issued to other clients are rejected. |
+| `LOBE_OAUTH_CLIENT_ID` | *(unset)* | OAuth client ID. Used for token introspection; tokens issued to other clients (except `LOBE_HUMAN_CLIENT_ID`) are rejected. |
 | `LOBE_OAUTH_CLIENT_SECRET` | *(unset)* | OAuth client secret for token introspection. |
 | `LOBE_PUBLIC_URL` | *(unset)* | Public base URL, for example `https://lobes.example.com`. Used in `/.well-known/oauth-protected-resource` and the `WWW-Authenticate` header. |
+| `LOBE_HUMAN_TOKEN` | *(unset)* | Bearer token for a person, not an agent. It works everywhere `LOBE_API_TOKEN` does and can also verify pages (`POST /api/lobes/{lobe}/pages/{slug}/verify`). Never give it to an AI tool. |
+| `LOBE_HUMAN_CLIENT_ID` | *(unset)* | OAuth client whose tokens count as a person: they pass introspection and can verify pages. The token's `username`, `sub` or `email` becomes the reviewer. |
+| `LOBE_HUMAN_SCOPE` | `lobe:verify` | OAuth scope that lets a token verify pages. Never grant it to the client your AI tools use. |
 | `LOBE_GIT_PUSH` | `0` | Push every change (`1`, `true`, or `yes`) for lobes that don't set `lobe.autopush`. |
 | `LOBE_GIT_TOKEN` | *(unset)* | Token or `username:token` for HTTPS Git (`clone`, `fetch`, `pull`, `push`, `ls-remote`). See [server.md](server.md#3-push-to-a-git-remote-optional). |
 | `LOBE_GIT_TOKEN_HOST` | `github.com` | The only host `LOBE_GIT_TOKEN` is sent to, for example `codeberg.org` or `gitlab.com`. Remotes on any other host get no token. |

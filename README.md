@@ -19,6 +19,25 @@ You give it sources (web pages, PDFs, notes, chat logs). Your AI turns them into
 
 ![Demo: create a lobe, add Karpathy's LLM wiki gist, ingest it, ask a question](docs/demo.gif)
 
+## Why it matters
+
+Letting an AI keep your notes is easy. Trusting those notes a year later is not. An AI-written wiki goes wrong in quiet ways: you can't tell which pages a person actually checked, a page that was right in spring is wrong by autumn, and the knowledge ends up locked in one app. lobe-forge is built around those three problems:
+
+- **You can see what to trust.** Every page records who last wrote it and whether a person reviewed it. Agents can't mark their own work as reviewed, and any later change shows the page as "changed since review".
+- **Old knowledge doesn't pass as current.** Each page has a type with its own shelf life (a runbook goes stale sooner than a decision record), and lint lists what is due for a check.
+- **Your knowledge outlives the tool.** Pages are plain Markdown in Git, and the whole wiki exports to the open [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format).
+
+## What you get
+
+- **Answers with sources.** Every claim on a page cites the source it came from, and answers cite the pages they used.
+- **Search that finds the right page.** Matches in a page's title, aliases and one-line facts ("atoms": commands, fixes, decisions) rank above matches in the body. Assistants read only the section they need, and edit pages in place instead of rewriting them.
+- **Provenance and human review.** `generated` and `verified` stamps that only the server writes, and a review that only a person can give. [How trust works](docs/how-it-works.md#trust-who-wrote-a-page-and-did-a-person-check-it)
+- **Lifecycle by page type.** Note, Runbook, Reference, Decision, Session and Todo, each with a default staleness period you can override per page. [Page types](docs/how-it-works.md#page-types-and-staleness)
+- **A health check.** Lint finds broken links, orphan pages, index drift, likely duplicates, stale pages and pages changed since review, and ignores anything inside code blocks. [Lint](docs/how-it-works.md#lint-keeping-the-wiki-healthy)
+- **Safe concurrent writes.** Every change is a Git commit; writes take turns, and a write based on an outdated read is refused instead of overwriting newer work.
+- **Open export.** `export-okf` turns a lobe into an OKF v0.2 bundle any tool can read. [Export](docs/how-it-works.md#export-open-knowledge-format)
+- **No dependencies.** The tooling is pure Python standard library, so it runs anywhere Python 3.10 and Git do, including a Raspberry Pi.
+
 ## Two ways to run it
 
 | | Local lobes | Remote lobes (self-hosted) |

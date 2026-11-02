@@ -512,6 +512,14 @@ def test_part2_http_rest_and_mcp_e2e() -> None:
                 base_url, "POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize"}, token=tok
             )
             assert code == 200 and init_resp["result"]["serverInfo"]["name"] == "lobe-server"
+            # version negotiation: echo a supported requested version, otherwise answer with the newest
+            def negotiated(params: Any) -> str:
+                return app.handle_mcp_message({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": params})["result"]["protocolVersion"]
+            assert init_resp["result"]["protocolVersion"] == app.MCP_PROTOCOL_VERSIONS[-1]
+            for v in app.MCP_PROTOCOL_VERSIONS:
+                assert negotiated({"protocolVersion": v}) == v
+            for other in ({"protocolVersion": "2099-01-01"}, {"protocolVersion": 7}, {}, ["not", "an", "object"]):
+                assert negotiated(other) == app.MCP_PROTOCOL_VERSIONS[-1], other
 
             code, notif_resp = http_req(
                 base_url, "POST", "/mcp", {"jsonrpc": "2.0", "method": "notifications/initialized"}, token=tok

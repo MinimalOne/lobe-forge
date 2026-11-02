@@ -1,6 +1,8 @@
 """Tests for wiki_tool code masking, fence parsing, and wiki_links_in."""
+import argparse
 import contextlib
 import io
+import json
 import sys
 from pathlib import Path
 
@@ -9,10 +11,14 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 if str(TEMPLATES_DIR) not in sys.path:
     sys.path.insert(0, str(TEMPLATES_DIR))
 
+import wiki_tool
+
 from wiki_tool import (
     PAGE_TYPES,
+    _format_iso_instant,
     body_start,
     canonical_page_type,
+    cmd_export_okf,
     cmd_hash,
     cmd_lint,
     cmd_set_type,
@@ -21,15 +27,20 @@ from wiki_tool import (
     code_line_indices,
     convert_legacy,
     effective_stale_after,
+    export_okf_bundle,
+    export_okf_page,
     human_actor,
     infer_page_type,
     mask_code,
     page_hash,
     parse_frontmatter,
+    rewrite_wiki_link,
     set_page_type,
     set_verified_field,
     strip_and_splice_trust_fields,
     strip_trust_fields,
+    transform_frontmatter_okf,
+    unmask_code,
     wiki_links_in,
 )
 
@@ -696,6 +707,177 @@ def test_cmd_lint_type_and_staleness():
             wiki_tool.INDEX = saved_index
 
 
+def test_unmask_code():
+    doc = """# Header
+
+```python
+# Code block with [[wiki-link]]
+def foo():
+    return True
+```
+
+Inline `code with [[link]]` here.
+
+    4-space indented block
+    with [[another-link]]
+
+Body text [[normal-link]].
+"""
+    masked, tokens = mask_code(doc)
+    assert "[[wiki-link]]" not in masked
+    assert "[[another-link]]" not in masked
+    assert "[[normal-link]]" in masked
+    restored = unmask_code(masked, tokens)
+    assert restored == doc
+
+
+def test_rewrite_wiki_link():
+    import re
+    def rw(s: str) -> str:
+        return re.sub(r"\[\[([^\]]+)\]\]", rewrite_wiki_link, s)
+
+    # Simple page
+    assert rw("[[my-page]]") == "[my-page](/my-page.md)"
+    # Piped display
+    assert rw("[[my-page|Custom Title]]") == "[Custom Title](/my-page.md)"
+    # Page with anchor
+    assert rw("[[my-page#heading]]") == "[my-page](/my-page.md#heading)"
+    # Page with anchor and custom display
+    assert rw("[[my-page#heading|Section Display]]") == "[Section Display](/my-page.md#heading)"
+    # Same-page anchor
+    assert rw("[[#anchor]]") == "[anchor](#anchor)"
+    assert rw("[[#anchor|See anchor]]") == "[See anchor](#anchor)"
+    # Subdirectory page
+    assert rw("[[log/2026-11]]") == "[log/2026-11](/log/2026-11.md)"
+    # Broken link retained
+    assert rw("[[missing-page]]") == "[missing-page](/missing-page.md)"
+
+
+def test_transform_frontmatter_okf():
+    # summary -> description, ISO timestamps, atoms and aliases preserved
+    fm_lines = [
+        "title: My Runbook\n",
+        "type: Runbook\n",
+        "summary: How to restore database.\n",
+        "stale_after: 2026-12-31\n",
+        'generated: { by: "claude", at: "2026-11-01" }\n',
+        "verified:\n",
+        "  by: human:jijin\n",
+        "  at: 2026-11-01\n",
+        "  sha: abc123def\n",
+        "atoms:\n",
+        "  - atom 1\n",
+        "aliases:\n",
+        "  - db-restore\n",
+    ]
+    transformed = transform_frontmatter_okf(fm_lines, is_index=False)
+    joined = "".join(transformed)
+    assert "description: How to restore database." in joined
+    assert "summary:" not in joined
+    assert "stale_after: 2026-12-31T00:00:00Z" in joined
+    assert 'at: "2026-11-01T00:00:00Z"' in joined
+    assert "at: 2026-11-01T00:00:00Z" in joined
+    assert "atoms:\n  - atom 1\n" in joined
+    assert "aliases:\n  - db-restore\n" in joined
+
+    # Root index gets okf_version: "0.2"
+    idx_fm = ["title: Index\n"]
+    transformed_idx = transform_frontmatter_okf(idx_fm, is_index=True)
+    assert transformed_idx[0] == 'okf_version: "0.2"\n'
+
+
+def test_export_okf_page():
+    # Page with code fences, inline spans, frontmatter and links
+    doc = """---
+title: Sample Page
+type: Runbook
+summary: Sample summary.
+stale_after: 2026-11-02
+atoms:
+  - atom fact
+---
+
+# Sample Page
+
+See [[target-page|Target Page]] and [[topic#section]].
+
+```python
+# Code with [[inner-link]]
+x = 1
+```
+
+Inline `[[not-a-link]]` preserved.
+"""
+    exported = export_okf_page(doc, is_index=False)
+    assert "description: Sample summary." in exported
+    assert "stale_after: 2026-11-02T00:00:00Z" in exported
+    assert "[Target Page](/target-page.md)" in exported
+    assert "[topic](/topic.md#section)" in exported
+    assert "[[inner-link]]" in exported  # Code fence preserved
+    assert "`[[not-a-link]]`" in exported  # Inline code preserved
+
+    # Index page without frontmatter gets frontmatter with okf_version: "0.2"
+    idx_raw = "# Index\n\n- [[sample]] — sample desc\n"
+    idx_exported = export_okf_page(idx_raw, is_index=True)
+    assert idx_exported.startswith('---\nokf_version: "0.2"\n---\n\n# Index')
+    assert "[sample](/sample.md)" in idx_exported
+
+
+def test_export_okf_bundle_and_cli():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        wiki_dir = Path(tmp) / "wiki"
+        wiki_dir.mkdir()
+        (wiki_dir / "index.md").write_text("# Index\n\n- [[page-one]] — Note\n")
+        (wiki_dir / "page-one.md").write_text(
+            "---\ntitle: Page One\ntype: Note\nsummary: Page one summary.\nlast_updated: 2026-11-01\nsource_count: 0\nprovenance: notes\natoms:\n  - Fact 1\n---\n\n# Page One\n\nSee [[page-two|Page Two]].\n"
+        )
+        sub_log = wiki_dir / "log"
+        sub_log.mkdir()
+        (sub_log / "2026-11.md").write_text("# Log 2026-11\n\n- 2026-11-01: [[page-one]] created.\n")
+
+        # 1. export_okf_bundle into target dir
+        out_dir = Path(tmp) / "export"
+        bundle = export_okf_bundle(wiki_dir, output_dir=out_dir)
+        assert len(bundle) == 3
+        assert "index.md" in bundle
+        assert "page-one.md" in bundle
+        assert "log/2026-11.md" in bundle
+
+        # Files written to disk
+        assert (out_dir / "index.md").exists()
+        assert (out_dir / "page-one.md").exists()
+        assert (out_dir / "log" / "2026-11.md").exists()
+
+        p1_text = (out_dir / "page-one.md").read_text()
+        assert "description: Page one summary." in p1_text
+        assert "[Page Two](/page-two.md)" in p1_text
+
+        # 2. CLI cmd_export_okf
+        saved_wiki = wiki_tool.WIKI
+        wiki_tool.WIKI = wiki_dir
+        try:
+            cli_out = Path(tmp) / "cli_export"
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = cmd_export_okf(argparse.Namespace(output=str(cli_out), json=False))
+            assert rc == 0
+            assert "Exported 3 pages" in out.getvalue()
+            assert (cli_out / "index.md").exists()
+
+            # CLI with --json
+            json_out = io.StringIO()
+            with contextlib.redirect_stdout(json_out):
+                rc = cmd_export_okf(argparse.Namespace(output=None, json=True))
+            assert rc == 0
+            data = json.loads(json_out.getvalue())
+            assert data["okf_version"] == "0.2"
+            assert data["page_count"] == 3
+            assert "page-one.md" in data["files"]
+        finally:
+            wiki_tool.WIKI = saved_wiki
+
+
 if __name__ == "__main__":
     test_code_line_indices_fences()
     test_code_line_indices_indented_blocks_and_lists()
@@ -721,4 +903,9 @@ if __name__ == "__main__":
     test_cmd_set_type()
     test_convert_legacy_with_type()
     test_cmd_lint_type_and_staleness()
+    test_unmask_code()
+    test_rewrite_wiki_link()
+    test_transform_frontmatter_okf()
+    test_export_okf_page()
+    test_export_okf_bundle_and_cli()
     print("All wiki_tool masker tests passed!")

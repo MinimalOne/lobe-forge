@@ -50,6 +50,7 @@ import forge  # noqa: E402
 from wiki_tool import (  # noqa: E402
     body_start,
     code_line_indices,
+    export_okf_bundle,
     human_actor,
     page_hash,
     parse_frontmatter,
@@ -689,6 +690,17 @@ def verify_page(
     }
 
 
+def export_okf(lobe: str) -> dict[str, Any]:
+    paths = l_paths(lobe)
+    exported = export_okf_bundle(paths["WIKI"])
+    return {
+        "lobe": lobe,
+        "okf_version": "0.2",
+        "page_count": len(exported),
+        "files": exported,
+    }
+
+
 # ── Part 2: MCP Tool Definitions & JSON-RPC 2.0 Dispatcher ──────────────────
 
 MCP_TOOLS: list[dict[str, Any]] = [
@@ -819,6 +831,17 @@ MCP_TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "lobe": {"type": "string"},
                 "strict": {"type": "boolean", "description": "Exit non-zero only on hard errors."},
+            },
+            "required": ["lobe"],
+        },
+    },
+    {
+        "name": "lobe_export_okf",
+        "description": "Export the lobe wiki as an Open Knowledge Format (OKF) v0.2 bundle.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "lobe": {"type": "string", "description": "Lobe name"},
             },
             "required": ["lobe"],
         },
@@ -965,6 +988,8 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
     if name == "lobe_lint":
         cmd = ["lint", *(["--strict"] if args.get("strict") else [])]
         return run_wiki_tool(args["lobe"], *cmd)
+    if name == "lobe_export_okf":
+        return export_okf(args["lobe"])
     if name == "lobe_add_raw":
         return add_raw(args["lobe"], args["filename"], args["content"])
     if name == "lobe_read_raw":
@@ -1315,6 +1340,7 @@ def dispatch_http(
                 ("GET", "sections", 4): ("lobe_sections", {}),
                 ("GET", "pending", 4): ("lobe_pending", {}),
                 ("GET", "lint", 4): ("lobe_lint", {"strict": flag("strict")}),
+                ("GET", "export-okf", 4): ("lobe_export_okf", {}),
                 ("GET", "links", 5): ("lobe_links", {"page": parts[-1]}),
                 ("POST", "raw", 4): ("lobe_add_raw", payload),
                 ("GET", "pages", 5): ("lobe_read_page", {

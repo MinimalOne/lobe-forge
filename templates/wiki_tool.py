@@ -13,6 +13,7 @@ Commands:
   pending         List raw/ sources not cited by any wiki page
   convert-legacy  Move legacy bold Summary/Sources/Last updated lines into frontmatter
   set-type        Set or infer frontmatter type on wiki pages
+  export-okf      Export wiki pages as an Open Knowledge Format v0.2 bundle
   rotate-log      Move log.md entries from earlier months into log/<YYYY-MM>.md
 
 Paths default to this repo's layout (wiki/, raw/). Override with WIKI_ROOT, WIKI_DIR,
@@ -549,6 +550,50 @@ def mask_code(text: str) -> tuple[str, list[str]]:
 
     masked = INLINE_CODE_RE.sub(repl, intermediate)
     return masked, tokens
+
+
+def unmask_code(text: str, tokens: list[str]) -> str:
+    """Reverse mask_code, restoring original code blocks and inline spans."""
+    for i in range(len(tokens) - 1, -1, -1):
+        target = f"\x00CODE{i}\x00" + ("\n" * tokens[i].count("\n"))
+        text = text.replace(target, tokens[i])
+    return text
+
+
+def rewrite_wiki_link(match: re.Match) -> str:
+    """Rewrite a [[wiki-link]] match into an OKF-compliant markdown link."""
+    raw = match.group(1).strip()
+    if "|" in raw:
+        target_part, _, display_part = raw.partition("|")
+        display = display_part.strip()
+    else:
+        target_part = raw
+        display = None
+
+    target_part = target_part.strip()
+    if "#" in target_part:
+        slug_part, _, anchor = target_part.partition("#")
+        anchor = anchor.strip()
+    else:
+        slug_part = target_part
+        anchor = ""
+
+    slug = slug_part.strip().lstrip("/")
+    if slug.endswith(".md"):
+        slug = slug[:-3]
+
+    if not display:
+        display = slug if slug else anchor
+
+    clean_anchor = anchor.lstrip("#")
+    if not slug:
+        href = f"#{clean_anchor}"
+    else:
+        href = f"/{slug}.md"
+        if clean_anchor:
+            href += f"#{clean_anchor}"
+
+    return f"[{display}]({href})"
 
 
 def wiki_links_in(text: str) -> list[str]:
@@ -1445,6 +1490,132 @@ def cmd_set_type(args) -> int:
     return rc
 
 
+def _format_iso_instant(val: str) -> str:
+    """Format a date or timestamp string as full ISO 8601 with UTC offset (e.g. 2026-11-02T00:00:00Z)."""
+    val = val.strip().strip("'\"")
+    if not val:
+        return val
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", val):
+        return f"{val}T00:00:00Z"
+    if re.match(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}$", val):
+        return val.replace(" ", "T") + "Z"
+    return val
+
+
+def transform_frontmatter_okf(fm_lines: list[str], is_index: bool = False) -> list[str]:
+    """Transform frontmatter lines: summary->description, ISO instant timestamps, okf_version on index."""
+    out: list[str] = []
+    has_description = any(_fm_key(l) == "description" for l in fm_lines)
+    has_okf_version = any(_fm_key(l) == "okf_version" for l in fm_lines)
+
+    if is_index and not has_okf_version:
+        out.append('okf_version: "0.2"\n')
+
+    in_trust_block = False
+    for line in fm_lines:
+        k = _fm_key(line)
+        if k is not None:
+            in_trust_block = k in ("generated", "verified")
+            if k == "summary" and not has_description:
+                colon_idx = line.find(":")
+                out.append("description:" + line[colon_idx + 1:])
+                has_description = True
+                continue
+            elif k == "stale_after":
+                key_part, sep, val_part = line.partition(":")
+                formatted = _format_iso_instant(val_part)
+                out.append(f"{key_part}: {formatted}\n")
+                continue
+            elif k in ("generated", "verified") and "{" in line and "}" in line:
+                key_part, sep, val_part = line.partition(":")
+                flow = _parse_flow_mapping(val_part)
+                if "at" in flow:
+                    flow["at"] = _format_iso_instant(flow["at"])
+                items = [f'{fk}: "{fv}"' if fk in ("at", "sha", "by") else f'{fk}: {fv}' for fk, fv in flow.items()]
+                joined = ", ".join(items)
+                out.append(f"{key_part}: {{ {joined} }}\n")
+                continue
+
+        if in_trust_block and line.startswith((" ", "\t")):
+            m = re.match(r"^(\s*at\s*:\s*)(.*)$", line)
+            if m:
+                formatted = _format_iso_instant(m.group(2))
+                out.append(f"{m.group(1)}{formatted}\n")
+                continue
+
+        out.append(line)
+
+    return out
+
+
+def export_okf_page(text: str, is_index: bool = False) -> str:
+    """Transform a single wiki page into an OKF v0.2 page."""
+    fm, _ = parse_frontmatter(text)
+    if fm is not None:
+        end = text.index("\n---\n", 4)
+        fm_block = text[4:end]
+        fm_lines = [l + "\n" for l in fm_block.splitlines()]
+        transformed_fm = transform_frontmatter_okf(fm_lines, is_index=is_index)
+        new_fm_text = "---\n" + "".join(transformed_fm) + "---\n"
+        rest_body = text[end + 5:]
+    else:
+        if is_index:
+            new_fm_text = '---\nokf_version: "0.2"\n---\n\n'
+        else:
+            new_fm_text = ""
+        rest_body = text
+
+    masked_body, tokens = mask_code(rest_body)
+    rewritten_body = re.sub(r"\[\[([^\]]+)\]\]", rewrite_wiki_link, masked_body)
+    restored_body = unmask_code(rewritten_body, tokens)
+
+    return new_fm_text + restored_body
+
+
+def export_okf_bundle(wiki_dir: Path, output_dir: Path | None = None) -> dict[str, str]:
+    """Export all wiki markdown pages from wiki_dir into an OKF v0.2 bundle."""
+    if not wiki_dir.is_dir():
+        raise FileNotFoundError(f"Wiki directory not found: {wiki_dir}")
+
+    exported: dict[str, str] = {}
+    for path in sorted(wiki_dir.rglob("*.md")):
+        rel = path.relative_to(wiki_dir)
+        rel_str = str(rel)
+        text = path.read_text(encoding="utf-8")
+        is_index = (rel_str == "index.md")
+        out_text = export_okf_page(text, is_index=is_index)
+        exported[rel_str] = out_text
+
+        if output_dir is not None:
+            dest = output_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(out_text, encoding="utf-8")
+
+    if "index.md" not in exported:
+        index_content = '---\nokf_version: "0.2"\n---\n\n# Index\n'
+        exported["index.md"] = index_content
+        if output_dir is not None:
+            (output_dir / "index.md").write_text(index_content, encoding="utf-8")
+
+    return exported
+
+
+def cmd_export_okf(args) -> int:
+    output_dir = Path(args.output) if args.output else None
+    if output_dir:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    elif not getattr(args, "json", False):
+        print("export-okf: error: output directory or --json is required", file=sys.stderr)
+        return 1
+
+    exported = export_okf_bundle(WIKI, output_dir=output_dir)
+    if getattr(args, "json", False):
+        print(json.dumps({"okf_version": "0.2", "page_count": len(exported), "files": exported}, indent=2))
+    if output_dir:
+        print(f"Exported {len(exported)} pages to {args.output} (OKF v0.2)")
+    return 0
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -1516,6 +1687,10 @@ def main():
     type_p.add_argument("--type", "-t", default=None, help="Page type (Note, Runbook, Decision, Reference, Session, Todo). Inferred if omitted.")
     type_p.add_argument("--all", action="store_true", help="Apply to all pages in wiki/")
 
+    export_p = sub.add_parser("export-okf", help="Export wiki pages as an Open Knowledge Format v0.2 bundle")
+    export_p.add_argument("output", nargs="?", default=None, help="Output directory for the OKF bundle")
+    export_p.add_argument("--json", action="store_true", help="Print exported bundle as JSON to stdout")
+
     args = p.parse_args()
     if args.command == "build":
         sys.exit(cmd_build(args))
@@ -1526,6 +1701,7 @@ def main():
                   "index-add": cmd_index_add, "set-atoms": cmd_set_atoms, "stamp": cmd_stamp,
                   "hash": cmd_hash, "verify": cmd_verify, "pending": cmd_pending,
                   "convert-legacy": cmd_convert_legacy, "set-type": cmd_set_type,
+                  "export-okf": cmd_export_okf,
                   "rotate-log": cmd_rotate_log}[args.command](args))
 
 

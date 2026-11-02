@@ -266,6 +266,24 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/lobes/{lobe}/export-okf:
+    parameters:
+      - $ref: "#/components/parameters/LobeName"
+    get:
+      operationId: exportOkfBundle
+      summary: Export lobe wiki as an Open Knowledge Format (OKF) v0.2 bundle
+      responses:
+        "200":
+          description: OKF bundle with transformed markdown pages and index.md
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkfExportBundle"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/lobes/{lobe}/links/{page}:
     parameters:
       - $ref: "#/components/parameters/LobeName"
@@ -774,6 +792,25 @@ components:
           type: string
         stderr:
           type: string
+
+    OkfExportBundle:
+      type: object
+      required: [lobe, okf_version, page_count, files]
+      properties:
+        lobe:
+          type: string
+          example: homelab
+        okf_version:
+          type: string
+          example: "0.2"
+        page_count:
+          type: integer
+          example: 5
+        files:
+          type: object
+          description: Mapping of relative path to transformed markdown page content
+          additionalProperties:
+            type: string
 
     AddRawRequest:
       type: object

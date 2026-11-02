@@ -60,6 +60,7 @@ Content with [[wiki-links]] and (source: source-file.md) after factual claims.
 - `type` is one of `Note` (default, 90-day lifecycle), `Runbook` (180-day lifecycle), `Decision` (permanent), `Reference` (365-day lifecycle), `Session` (dated notes/transcripts, permanent), or `Todo` (90-day lifecycle). Determines lifecycle staleness defaults.
 - `stale_after` (optional) is a `YYYY-MM-DD` date when the page goes stale, overriding the type's default. Otherwise the clock runs from the latest of `last_updated`, the last edit, or the last human review; a page with no `type` ages like a `Note`.
 - `status` (optional): `archived`, `deprecated` or `superseded` marks a page that is kept for the record and never goes stale.
+- `generated` and `verified` are trust fields owned by the tooling, not by you: never write them. lobe-server drops both from every write, stamps `generated: { by, at }` itself, and keeps `verified: { by, at, sha }`, which only a person can set. Local lobes stamp them with `wikictl stamp` and `wikictl verify`.
 - `source_count` must equal the number of `sources` items.
 - `sources` lists files under `{{RAW}}/`; anything else (conversations, links not saved) goes in `provenance`.
 - `aliases` (optional) are other names for the same thing; search matches them.

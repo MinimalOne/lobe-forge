@@ -17,8 +17,6 @@ You give it sources (web pages, PDFs, notes, chat logs). Your AI turns them into
 - **Local or self-hosted.** Keep lobes on your computer, or run `lobe-server` on a home server and reach them from every device, including your phone.
 - **Yours.** Plain Markdown in Git. Push it to any Git host, or keep it entirely offline.
 
-![Demo: create a lobe, add Karpathy's LLM wiki gist, ingest it, ask a question](docs/demo.gif)
-
 ## Why it matters
 
 Letting an AI keep your notes is easy. Trusting those notes a year later is not. An AI-written wiki goes wrong in quiet ways: you can't tell which pages a person actually checked, a page that was right in spring is wrong by autumn, and the knowledge ends up locked in one app. lobe-forge is built around those three problems:
@@ -37,6 +35,8 @@ Letting an AI keep your notes is easy. Trusting those notes a year later is not.
 - **Safe concurrent writes.** Every change is a Git commit; writes take turns, and a write based on an outdated read is refused instead of overwriting newer work.
 - **Open export.** `export-okf` turns a lobe into an OKF v0.2 bundle any tool can read. [Export](docs/how-it-works.md#export-open-knowledge-format)
 - **No dependencies.** The tooling is pure Python standard library, so it runs anywhere Python 3.10 and Git do, including a Raspberry Pi.
+
+![Demo: create a lobe, add Karpathy's LLM wiki gist, ingest it, ask a question](docs/demo.gif)
 
 ## Two ways to run it
 

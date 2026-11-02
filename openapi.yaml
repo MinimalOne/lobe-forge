@@ -445,6 +445,84 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /api/lobes/{lobe}/pages/{slug}/verify:
+    parameters:
+      - $ref: "#/components/parameters/LobeName"
+      - name: slug
+        in: path
+        required: true
+        description: Lowercase hyphenated wiki page slug (without `.md`)
+        schema:
+          type: string
+          pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
+    get:
+      operationId: getVerifyWikiPage
+      summary: Get verification status or HTML verification confirmation page
+      description: |
+        Send `Accept: text/html` for a page with a one-click verify form. A browser cannot send a
+        Bearer header, so this route alone also accepts the token as `?token=`; the page then posts
+        it back in the form body, never the URL.
+      parameters:
+        - name: token
+          in: query
+          required: false
+          description: Bearer token for browsers (this route only)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Verification status or HTML page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifyStatusResponse"
+            text/html:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    post:
+      operationId: verifyWikiPage
+      summary: Stamp human verification on a wiki page pinned by expected_hash
+      description: |
+        Requires a human credential (`LOBE_HUMAN_TOKEN`, an OAuth token from `LOBE_HUMAN_CLIENT_ID`,
+        or one with `LOBE_HUMAN_SCOPE`); the agent token gets 403. There is no MCP equivalent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyPageRequest"
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/VerifyPageRequest"
+                - type: object
+                  properties:
+                    token:
+                      type: string
+                      description: Bearer token, when the browser form cannot send a header
+      responses:
+        "200":
+          description: Page verified and committed locally
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifyPageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /mcp:
     post:
       operationId: handleMcpJsonRpc
@@ -510,6 +588,12 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
     Conflict:
       description: Operation failed due to conflict or command error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Action forbidden (e.g. human verification credential required)
       content:
         application/json:
           schema:
@@ -842,6 +926,67 @@ components:
               type: string
               description: Short SHA-256 of the page after the write
         - $ref: "#/components/schemas/GitCommitStatus"
+
+    VerifyPageRequest:
+      type: object
+      required: [expected_hash]
+      properties:
+        expected_hash:
+          type: string
+          description: '`hash` from GET .../verify (page content without trust fields); not the `sha` from a page read'
+        by:
+          type: string
+          description: Reviewer name (e.g. 'jijin'), used only with a shared credential; an OAuth token's own identity wins
+
+    VerifyPageResponse:
+      allOf:
+        - type: object
+          required: [lobe, slug, sha, verified]
+          properties:
+            lobe:
+              type: string
+            slug:
+              type: string
+            sha:
+              type: string
+              description: Short SHA-256 of the page after verification
+            verified:
+              type: object
+              required: [by, at, sha]
+              properties:
+                by:
+                  type: string
+                at:
+                  type: string
+                sha:
+                  type: string
+        - $ref: "#/components/schemas/GitCommitStatus"
+
+    VerifyStatusResponse:
+      type: object
+      required: [lobe, slug, hash, is_verified, is_stale]
+      properties:
+        lobe:
+          type: string
+        slug:
+          type: string
+        hash:
+          type: string
+          description: Current page_hash (content without trust fields); pass as `expected_hash` to verify
+        verified:
+          type: object
+          nullable: true
+          properties:
+            by:
+              type: string
+            at:
+              type: string
+            sha:
+              type: string
+        is_verified:
+          type: boolean
+        is_stale:
+          type: boolean
 
     JsonRpcRequest:
       type: object

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -1185,6 +1186,241 @@ verified:
         assert app.read_page("trust", "trust-page")["sha"] == read3["sha"]
 
 
+def test_part8_verification_channel_and_auth() -> None:
+    from http.server import BaseHTTPRequestHandler
+    from urllib.parse import parse_qs
+
+    class MockIdP(BaseHTTPRequestHandler):
+        def _send(self, data: dict[str, Any]) -> None:
+            out = json.dumps(data).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def do_GET(self) -> None:
+            self._send({"introspection_endpoint": f"{mock_idp_url}/introspect/"})
+
+        def do_POST(self) -> None:
+            body = self.rfile.read(int(self.headers["Content-Length"])).decode()
+            token = parse_qs(body)["token"][0]
+            self._send({
+                "agent-oauth-token": {"active": True, "client_id": "lobe-agent", "scope": "read write"},
+                "human-oauth-token": {"active": True, "client_id": "lobe-agent", "scope": "read write lobe:verify", "username": "alice"},
+                "human-client-token": {"active": True, "client_id": "lobe-human-client", "scope": "read write", "username": "bob"},
+            }.get(token, {"active": False}))
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            pass
+
+    mock_idp = ThreadingHTTPServer(("127.0.0.1", 0), MockIdP)
+    mock_idp_url = f"http://127.0.0.1:{mock_idp.server_address[1]}"
+    threading.Thread(target=mock_idp.serve_forever, daemon=True).start()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["LOBES_DIR"] = tmp
+        os.environ["LOBE_API_TOKEN"] = "agent-secret-token"
+        os.environ["LOBE_HUMAN_TOKEN"] = "human-secret-token"
+        os.environ["LOBE_OAUTH_ISSUER"] = f"{mock_idp_url}/application/o/lobe/"
+        os.environ["LOBE_OAUTH_CLIENT_ID"] = "lobe-agent"
+        os.environ["LOBE_OAUTH_CLIENT_SECRET"] = "lobe-s3cret"
+        os.environ["LOBE_HUMAN_CLIENT_ID"] = "lobe-human-client"
+        os.environ["LOBE_HUMAN_SCOPE"] = "lobe:verify"
+        app.introspection_endpoint.cache_clear()
+        app._TOKEN_CACHE.clear()
+
+        # 1. Create a lobe and a test page
+        app.create_lobe("verlobe", "Verification test lobe")
+        app.write_page(
+            "verlobe",
+            "verify-test",
+            "---\ntitle: Verify Test\nsummary: Summary\nlast_updated: 2026-11-02\nsource_count: 0\nprovenance: notes\natoms:\n  - Atom fact\n---\n\n## Section\n\nOriginal content.\n",
+        )
+        paths = app.l_paths("verlobe")
+        page_file = paths["WIKI"] / "verify-test.md"
+        actual_page_hash = app.page_hash(page_file.read_text(encoding="utf-8"))
+
+        # 2. GET verify status (unverified)
+        code, status_data = app.dispatch_http("GET", "/api/lobes/verlobe/pages/verify-test/verify", b"", "Bearer agent-secret-token")
+        assert code == 200
+        assert status_data["is_verified"] is False
+        assert status_data["is_stale"] is False
+        assert status_data["hash"] == actual_page_hash
+
+        # 3. GET HTML confirmation page
+        code, html_data = app.dispatch_http(
+            "GET",
+            "/api/lobes/verlobe/pages/verify-test/verify",
+            b"",
+            "Bearer human-secret-token",
+            headers={"Accept": "text/html"},
+        )
+        assert code == 200
+        assert isinstance(html_data, str)
+        assert "<!DOCTYPE html>" in html_data
+        assert ">unverified<" in html_data
+
+        # 4. Auth gating on POST /api/lobes/{lobe}/pages/{slug}/verify
+        # 4a. No token -> 401
+        code, body = app.dispatch_http("POST", "/api/lobes/verlobe/pages/verify-test/verify", json.dumps({"expected_hash": actual_page_hash}).encode())
+        assert code == 401
+
+        # 4b. Agent token (LOBE_API_TOKEN) -> 403 Forbidden!
+        code, body = app.dispatch_http(
+            "POST",
+            "/api/lobes/verlobe/pages/verify-test/verify",
+            json.dumps({"expected_hash": actual_page_hash}).encode(),
+            "Bearer agent-secret-token",
+        )
+        assert code == 403
+        assert "Forbidden" in body["error"]
+
+        # 4c. Agent OAuth token without human scope -> 403 Forbidden!
+        code, body = app.dispatch_http(
+            "POST",
+            "/api/lobes/verlobe/pages/verify-test/verify",
+            json.dumps({"expected_hash": actual_page_hash}).encode(),
+            "Bearer agent-oauth-token",
+        )
+        assert code == 403
+
+        # 4d. Human token, but expected_sha mismatch -> 409 Conflict
+        code, body = app.dispatch_http(
+            "POST",
+            "/api/lobes/verlobe/pages/verify-test/verify",
+            json.dumps({"expected_hash": "wrong_hash_1234"}).encode(),
+            "Bearer human-secret-token",
+        )
+        assert code == 409
+        assert "does not match expected_hash" in body["error"]
+
+        # 4e. Human token, correct expected_sha -> 200 OK!
+        code, body = app.dispatch_http(
+            "POST",
+            "/api/lobes/verlobe/pages/verify-test/verify",
+            json.dumps({"expected_hash": actual_page_hash, "by": "jijin"}).encode(),
+            "Bearer human-secret-token",
+        )
+        assert code == 200
+        assert body["verified"]["sha"] == actual_page_hash
+        assert body["verified"]["by"] == "human:jijin"
+        assert body["committed"] is True
+
+        # Check page on disk has verified field
+        disk_text = page_file.read_text(encoding="utf-8")
+        assert 'verified: { by: "human:jijin", at:' in disk_text
+        assert f'sha: "{actual_page_hash}"' in disk_text
+
+        # 5. GET verify status now returns verified and not stale
+        code, status_data = app.dispatch_http("GET", "/api/lobes/verlobe/pages/verify-test/verify", b"", "Bearer agent-secret-token")
+        assert code == 200
+        assert status_data["is_verified"] is True
+        assert status_data["is_stale"] is False
+
+        # 6. Browser flow: GET the page with ?token=, then POST its form with the token in the body
+        form_hdrs = {"Accept": "text/html", "Content-Type": "application/x-www-form-urlencoded"}
+        code, html_get = app.dispatch_http(
+            "GET", "/api/lobes/verlobe/pages/verify-test/verify?token=human-secret-token", b"", headers={"Accept": "text/html"})
+        assert code == 200 and 'name="token" value="human-secret-token"' in html_get, html_get
+        code, html_post = app.dispatch_http(
+            "POST",
+            "/api/lobes/verlobe/pages/verify-test/verify",
+            f"expected_hash={actual_page_hash}&by=jijin&token=human-secret-token".encode(),
+            headers=form_hdrs,
+        )
+        assert code == 200 and isinstance(html_post, str) and "Verification confirmed" in html_post, html_post
+        # The token is not taken from the URL on POST, nor anywhere outside the verify page
+        code, _ = app.dispatch_http(
+            "POST", "/api/lobes/verlobe/pages/verify-test/verify?token=human-secret-token",
+            f"expected_hash={actual_page_hash}".encode(), headers=form_hdrs)
+        assert code == 401
+        assert app.dispatch_http("GET", "/api/lobes?token=agent-secret-token", b"")[0] == 401
+        # Form bodies are only read on the verify route
+        code, body = app.dispatch_http("POST", "/api/lobes", b"name=x&purpose=y", "Bearer agent-secret-token",
+                                       headers={"Content-Type": "application/x-www-form-urlencoded"})
+        assert code == 400 and "Invalid JSON" in body["error"], (code, body)
+        assert app.dispatch_http("POST", "/api/lobes", b"\xff\xfe", "Bearer agent-secret-token")[0] == 400
+
+        # Agents cannot verify over MCP: the tool does not exist
+        rpc = lambda m, p: json.dumps({"jsonrpc": "2.0", "id": 9, "method": m, "params": p}).encode()  # noqa: E731
+        _, tools = app.dispatch_http("POST", "/mcp", rpc("tools/list", {}), "Bearer agent-secret-token")
+        assert "lobe_verify_page" not in {x["name"] for x in tools["result"]["tools"]}
+        _, res = app.dispatch_http("POST", "/mcp", rpc("tools/call", {"name": "lobe_verify_page", "arguments": {
+            "lobe": "verlobe", "slug": "verify-test", "expected_hash": actual_page_hash, "by": "mallory"}}), "Bearer agent-secret-token")
+        assert "mallory" not in page_file.read_text(encoding="utf-8"), res
+
+        # 7. Human OAuth token verification (scope lobe:verify); its identity beats a claimed `by`
+        code, body = app.dispatch_http(
+            "POST",
+            "/api/lobes/verlobe/pages/verify-test/verify",
+            json.dumps({"expected_hash": actual_page_hash, "by": "mallory"}).encode(),
+            "Bearer human-oauth-token",
+        )
+        assert code == 200
+        assert body["verified"]["by"] == "human:alice"
+
+        # 8. Human OAuth client verification (client_id lobe-human-client)
+        code, body = app.dispatch_http(
+            "POST",
+            "/api/lobes/verlobe/pages/verify-test/verify",
+            json.dumps({"expected_hash": actual_page_hash}).encode(),
+            "Bearer human-client-token",
+        )
+        assert code == 200
+        assert body["verified"]["by"] == "human:bob"
+
+        # 9. Now agent modifies the content of verify-test using edit_page
+        app.edit_page(
+            "verlobe",
+            "verify-test",
+            [{"op": "append", "content": "Tampered agent line."}],
+            expected_sha=body["sha"],
+            actor="agent-42",
+        )
+        tampered_text = page_file.read_text(encoding="utf-8")
+        assert "Tampered agent line." in tampered_text
+        # Verified block was preserved by edit_page
+        assert 'verified: { by: "human:bob"' in tampered_text
+
+        # Check GET verify status: page is now STALE
+        code, status_data = app.dispatch_http("GET", "/api/lobes/verlobe/pages/verify-test/verify", b"", "Bearer agent-secret-token")
+        assert code == 200
+        assert status_data["is_verified"] is True
+        assert status_data["is_stale"] is True
+
+        # Check lint detects the stale verification
+        lint_res = app.call_mcp_tool("lobe_lint", {"lobe": "verlobe", "strict": True})
+        assert lint_res["returncode"] == 0  # soft warning
+        assert "content changed since review by human:bob" in lint_res["stdout"]
+
+        # 10. Frontmatter from git is escaped in the HTML page
+        text = page_file.read_text(encoding="utf-8").replace('by: "human:bob"', 'by: "<script>alert(1)</script>"')
+        page_file.write_text(text, encoding="utf-8")
+        _, html_xss = app.dispatch_http("GET", "/api/lobes/verlobe/pages/verify-test/verify", b"",
+                                        "Bearer agent-secret-token", headers={"Accept": "text/html"})
+        assert "<script>" not in html_xss and "&lt;script&gt;" in html_xss, html_xss
+
+        # 11. Over real HTTP: the body is written once, and HTML carries no-referrer
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), app.LobeHTTPHandler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            def raw_get(path: str, accept: str = "*/*") -> bytes:
+                sock = socket.create_connection(srv.server_address)
+                sock.sendall(f"GET {path} HTTP/1.0\r\nAccept: {accept}\r\n\r\n".encode())
+                out = b""
+                while chunk := sock.recv(65536):
+                    out += chunk
+                sock.close()
+                return out
+            head_, _, body_ = raw_get("/health").partition(b"\r\n\r\n")
+            assert body_ == b'{"status": "ok"}', body_
+            head_, _, body_ = raw_get("/api/lobes/verlobe/pages/verify-test/verify?token=human-secret-token", "text/html").partition(b"\r\n\r\n")
+            assert b"Referrer-Policy: no-referrer" in head_ and body_.count(b"<!DOCTYPE html>") == 1, head_
+        finally:
+            srv.shutdown()
+
+
 if __name__ == "__main__":
     test_part1_core_and_git_scenarios()
     print("OK: Part 1 core & Git E2E scenarios passed")
@@ -1200,3 +1436,5 @@ if __name__ == "__main__":
     print("OK: Part 6 h2_spans & code masker passed")
     test_part7_server_owned_trust_fields()
     print("OK: Part 7 server-owned trust fields passed")
+    test_part8_verification_channel_and_auth()
+    print("OK: Part 8 verification channel and auth passed")

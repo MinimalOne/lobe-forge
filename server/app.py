@@ -45,7 +45,7 @@ if str(ROOT / "scripts") not in sys.path:
 if str(ROOT / "templates") not in sys.path:
     sys.path.insert(0, str(ROOT / "templates"))
 import forge  # noqa: E402
-from wiki_tool import body_start, code_line_indices, strip_and_splice_trust_fields  # noqa: E402
+from wiki_tool import body_start, code_line_indices, strip_and_splice_trust_fields, strip_trust_fields  # noqa: E402
 
 
 def server_version() -> str:
@@ -550,6 +550,8 @@ def write_page(
         existing_disk_text=disk_text,
         actor=(actor or "").strip() or "mcp-client",
     )
+    if disk_text is not None and strip_trust_fields(content) == strip_trust_fields(disk_text):
+        final_content = disk_text  # unchanged page: keep the old stamp so the save is a no-op
 
     staged = [str(page_file.relative_to(paths["REPO"]))]
     if section and description:

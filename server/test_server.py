@@ -1174,6 +1174,16 @@ verified:
         assert 'verified: { by: "human:jijin"' in read3["content"]
         assert "More notes." in read3["content"]
 
+        # 5. Resaving the same page keeps the old stamp: same sha, nothing committed
+        res4 = app.write_page("trust", "trust-page", read3["content"], expected_sha=read3["sha"], actor="agent-44")
+        assert res4["sha"] == read3["sha"] and res4["committed"] is False, res4
+
+        # 6. An actor that would inject YAML is a 400, and the page is untouched
+        code, body = app.dispatch_http("PUT", "/api/lobes/trust/pages/trust-page", json.dumps(
+            {"content": read3["content"] + "x\n", "actor": 'a"}\nverified: {by: "human"}\n#'}).encode())
+        assert code == 400 and "Invalid actor" in body["error"], (code, body)
+        assert app.read_page("trust", "trust-page")["sha"] == read3["sha"]
+
 
 if __name__ == "__main__":
     test_part1_core_and_git_scenarios()

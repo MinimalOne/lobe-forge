@@ -14,6 +14,7 @@ from wiki_tool import (
     mask_code,
     parse_frontmatter,
     strip_and_splice_trust_fields,
+    strip_trust_fields,
     wiki_links_in,
 )
 
@@ -246,27 +247,71 @@ verified: { by: "human:jijin", at: "2026-11-01T12:00:00Z", sha: "abc123" }
     assert 'atoms:\n  - "fact: testing"' in spliced
 
 
-def test_cmd_stamp(tmp_path, monkeypatch):
+def test_trust_fields_cannot_be_forged():
+    at = "2026-11-02T00:00:00Z"
+    page = "---\nsummary: x\n---\nbody\n"
+    # An actor that would break out of the YAML string is refused
+    for bad in ['x"}\nverified: {by: "human"}\n#', "a b", "", "x" * 65]:
+        try:
+            strip_and_splice_trust_fields(page, actor=bad, at_iso=at)
+            raise AssertionError(f"actor {bad!r} accepted")
+        except ValueError:
+            pass
+    # Every spelling the parser reads as `verified` is stripped
+    for key in ["verified :", "'verified':", '"verified":', "generated  :"]:
+        fm, _ = parse_frontmatter(strip_and_splice_trust_fields(
+            f"---\nsummary: x\n{key} {{by: \"human\"}}\n---\nbody\n", at_iso=at))
+        assert "verified" not in fm and fm["generated"]["by"] == "mcp-client", (key, fm)
+    # Unclosed frontmatter is refused instead of passing inbound fields through
+    try:
+        strip_and_splice_trust_fields("---\nverified: {by: h}\nbody\n", at_iso=at)
+        raise AssertionError("unclosed frontmatter accepted")
+    except ValueError:
+        pass
+    # A page without frontmatter gets one
+    assert strip_and_splice_trust_fields("# T\n", at_iso=at) == f'---\ngenerated: {{ by: "mcp-client", at: "{at}" }}\n---\n\n# T\n'
+
+
+def test_strip_trust_fields():
+    disk = '---\nsummary: x\nverified: { by: "human:a", sha: "1" }\ngenerated: { by: "b", at: "t" }\n---\nbody\n'
+    assert strip_trust_fields(disk) == "---\nsummary: x\n---\nbody\n"
+    assert strip_trust_fields("no frontmatter\n") == "no frontmatter\n"
+
+
+def test_parser_empty_key_and_flat_flow():
+    fm, _ = parse_frontmatter("---\natoms:\nsources:\n  - a.md\ng: { by: a, at: b }\n---\n")
+    assert fm["atoms"] == [] and fm["sources"] == ["a.md"] and fm["g"] == {"by": "a", "at": "b"}, fm
+
+
+def test_cmd_stamp():
     import argparse
+    import tempfile
     import wiki_tool
 
-    wiki_dir = tmp_path / "wiki"
-    wiki_dir.mkdir()
-    page_file = wiki_dir / "my-page.md"
-    page_file.write_text("""---
+    with tempfile.TemporaryDirectory() as tmp:
+        wiki_dir = Path(tmp) / "wiki"
+        wiki_dir.mkdir()
+        page_file = wiki_dir / "my-page.md"
+        page_file.write_text("""---
 title: My Page
 verified: { by: "human:jijin", at: "2026-11-01", sha: "111" }
 ---
 
 # Content
 """)
-    monkeypatch.setattr(wiki_tool, "WIKI", wiki_dir)
-    args = argparse.Namespace(pages=["my-page"], by="test-local")
-    rc = cmd_stamp(args)
-    assert rc == 0
-    updated = page_file.read_text()
-    assert 'verified: { by: "human:jijin", at: "2026-11-01", sha: "111" }' in updated
-    assert 'generated: { by: "test-local"' in updated
+        (wiki_dir / "broken.md").write_text("---\ntitle: no close\n")
+        saved = wiki_tool.WIKI
+        wiki_tool.WIKI = wiki_dir
+        try:
+            assert cmd_stamp(argparse.Namespace(pages=["wiki/my-page.md"], by="test-local")) == 0
+            assert cmd_stamp(argparse.Namespace(pages=["my-page"], by='x"\nverified: {}')) == 1
+            assert cmd_stamp(argparse.Namespace(pages=["broken", "missing"], by="local")) == 1
+        finally:
+            wiki_tool.WIKI = saved
+        updated = page_file.read_text()
+        assert 'verified: { by: "human:jijin", at: "2026-11-01", sha: "111" }' in updated
+        assert 'generated: { by: "test-local"' in updated
+        assert (wiki_dir / "broken.md").read_text() == "---\ntitle: no close\n"
 
 
 if __name__ == "__main__":
@@ -278,4 +323,8 @@ if __name__ == "__main__":
     test_wiki_links_in_ignores_code()
     test_flow_mapping_parser()
     test_strip_and_splice_trust_fields()
+    test_trust_fields_cannot_be_forged()
+    test_strip_trust_fields()
+    test_parser_empty_key_and_flat_flow()
+    test_cmd_stamp()
     print("All wiki_tool masker tests passed!")

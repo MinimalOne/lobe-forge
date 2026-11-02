@@ -90,12 +90,7 @@ def _parse_flow_mapping(s: str) -> dict:
     for item in _split_flow_items(inner):
         if ":" in item:
             k, _, v = item.partition(":")
-            k = k.strip()
-            v = v.strip()
-            if v.startswith("{") and v.endswith("}"):
-                result[k] = _parse_flow_mapping(v)
-            else:
-                result[k] = _unquote(v)
+            result[k.strip()] = _unquote(v)  # flat only: trust fields never nest
     return result
 
 
@@ -152,7 +147,7 @@ def _parse_fm_block(fm_text: str) -> dict:
                                 sub_dict[sk] = _parse_flow_mapping(sv)
                             else:
                                 sub_dict[sk] = _unquote(sv)
-                    result[key] = sub_dict
+                    result[key] = sub_dict or []  # an empty `key:` stays a list, as before
         else:
             i += 1
     return result
@@ -171,32 +166,45 @@ def parse_frontmatter(text: str) -> tuple[dict | None, str]:
     return fm, body
 
 
-def extract_frontmatter_block(text: str, key: str) -> list[str]:
-    """Extract a top-level key and its indented continuation lines from frontmatter."""
-    if not text.startswith("---"):
-        return []
+TRUST_KEYS = ("generated", "verified")
+ACTOR_RE = re.compile(r"^[\w.@:-]{1,64}$")
+
+
+def _split_trust(fm_lines: list[str]) -> tuple[list[str], list[str]]:
+    """Split frontmatter lines into (other lines, `verified:` block lines); `generated:` is dropped.
+    Keys are matched the way _parse_fm_block reads them (`verified :`, `'verified':` included)."""
+    kept: list[str] = []
+    verified: list[str] = []
+    current = None
+    for line in fm_lines:
+        if current and line.startswith((" ", "\t")):
+            if current == "verified":
+                verified.append(line)
+            continue
+        key = line.split(":", 1)[0].strip().strip("'\"") if ":" in line and not line.startswith((" ", "\t", "#")) else None
+        current = key if key in TRUST_KEYS else None
+        if current == "verified":
+            verified.append(line)
+        elif not current:
+            kept.append(line)
+    return kept, verified
+
+
+def _frontmatter_end(lines: list[str]) -> int:
+    """body_start(), but an opening `---` with no closing line is an error, not a page without frontmatter."""
+    start = body_start(lines)
+    if not start and lines and lines[0].rstrip("\r\n") == "---":
+        raise ValueError("Frontmatter has no closing '---' line")
+    return start
+
+
+def strip_trust_fields(text: str) -> str:
+    """The page with `generated:` and `verified:` removed from its frontmatter."""
     lines = text.splitlines(keepends=True)
-    if not lines or lines[0].rstrip("\r\n") != "---":
-        return []
-    end_fm = -1
-    for i in range(1, len(lines)):
-        if lines[i].rstrip("\r\n") == "---":
-            end_fm = i
-            break
-    if end_fm == -1:
-        return []
-    out = []
-    recording = False
-    for line in lines[1:end_fm]:
-        if line.startswith(f"{key}:"):
-            recording = True
-            out.append(line)
-        elif recording:
-            if line.startswith((" ", "\t")):
-                out.append(line)
-            else:
-                break
-    return out
+    start = body_start(lines)
+    if not start:
+        return text
+    return lines[0] + "".join(_split_trust(lines[1:start - 1])[0]) + "".join(lines[start - 1:])
 
 
 def strip_and_splice_trust_fields(
@@ -207,59 +215,30 @@ def strip_and_splice_trust_fields(
 ) -> str:
     """
     Server-owned trust fields:
-    - Strip any inbound `generated:` and `verified:` lines from `text`.
-    - Carry forward existing `verified:` block from `existing_disk_text` (if any).
+    - Strip any inbound `generated:` and `verified:` blocks from `text`.
+    - Carry forward the `verified:` block from `existing_disk_text` (if any).
     - Restamp `generated: { by: "<actor>", at: "<iso_utc>" }`.
-    - Splice cleanly inside `---` delimiters, preserving comments and formatting.
+    Raises ValueError for an actor that is not a plain identifier or unclosed frontmatter.
     """
+    if not ACTOR_RE.match(actor):
+        raise ValueError(f"Invalid actor {actor!r}: use 1-64 letters, digits or . _ @ : -")
     if at_iso is None:
         at_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    disk_verified = []
+    disk_verified: list[str] = []
     if existing_disk_text:
-        disk_verified = extract_frontmatter_block(existing_disk_text, "verified")
-
-    if not text.startswith("---"):
-        fm_lines = [f'generated: {{ by: "{actor}", at: "{at_iso}" }}\n']
-        if disk_verified:
-            fm_lines = disk_verified + fm_lines
-        return "---\n" + "".join(fm_lines) + "---\n\n" + text
+        disk_lines = existing_disk_text.splitlines(keepends=True)
+        disk_start = body_start(disk_lines)
+        if disk_start:
+            disk_verified = _split_trust(disk_lines[1:disk_start - 1])[1]
+    gen_line = f'generated: {{ by: "{actor}", at: "{at_iso}" }}\n'
 
     lines = text.splitlines(keepends=True)
-    if not lines or lines[0].rstrip("\r\n") != "---":
-        return text
-    end_fm = -1
-    for i in range(1, len(lines)):
-        if lines[i].rstrip("\r\n") == "---":
-            end_fm = i
-            break
-    if end_fm == -1:
-        return text
-
-    new_fm_lines = []
-    skipping = False
-    for line in lines[1:end_fm]:
-        if line.startswith(("generated:", "verified:")):
-            skipping = True
-            continue
-        elif skipping:
-            if line.startswith((" ", "\t")):
-                continue
-            else:
-                skipping = False
-        new_fm_lines.append(line)
-
-    if disk_verified:
-        new_fm_lines.extend(disk_verified)
-
-    gen_line = f'generated: {{ by: "{actor}", at: "{at_iso}" }}\n'
-    new_fm_lines.append(gen_line)
-
-    formatted_fm = []
-    for l in new_fm_lines:
-        formatted_fm.append(l if l.endswith("\n") else l + "\n")
-
-    return lines[0] + "".join(formatted_fm) + "".join(lines[end_fm:])
+    start = _frontmatter_end(lines)
+    if not start:
+        return "---\n" + "".join(disk_verified) + gen_line + "---\n\n" + text
+    kept = _split_trust(lines[1:start - 1])[0]
+    return lines[0] + "".join(kept + disk_verified) + gen_line + "".join(lines[start - 1:])
 
 
 def _split_top(s: str) -> list[str]:
@@ -915,9 +894,14 @@ def cmd_search(args) -> int:
     return 0
 
 
+def _page_slug(arg: str) -> str:
+    """`wiki/foo.md`, `foo.md` or `foo` -> `foo`."""
+    return arg.removesuffix(".md").removeprefix(f"{WIKI.name}/")
+
+
 def cmd_links(args) -> int:
     entries = {p.stem: parse_page(p) for p in _content_pages()}
-    slug = args.page.removesuffix(".md").removeprefix(f"{WIKI.name}/")
+    slug = _page_slug(args.page)
     if slug not in entries:
         print(f"No page '{slug}'. Try: wiki_tool.py search {slug}", file=sys.stderr)
         return 1
@@ -1057,7 +1041,7 @@ def convert_legacy(text: str) -> tuple[str | None, str]:
 
 
 def cmd_set_atoms(args) -> int:
-    slug = args.page.removesuffix(".md").removeprefix(f"{WIKI.name}/")
+    slug = _page_slug(args.page)
     path = WIKI / f"{slug}.md"
     if not path.is_file():
         print(f"No page '{slug}'.", file=sys.stderr)
@@ -1107,19 +1091,22 @@ def cmd_set_atoms(args) -> int:
 
 
 def cmd_stamp(args) -> int:
-    actor = getattr(args, "by", "local") or "local"
     rc = 0
     for page in args.pages:
-        slug = page.removesuffix(".md").removeprefix(f"{WIKI.name}/")
-        path = WIKI / f"{slug}.md"
+        path = WIKI / f"{_page_slug(page)}.md"
         if not path.is_file():
-            print(f"No page '{slug}'.", file=sys.stderr)
+            print(f"No page '{path.stem}'.", file=sys.stderr)
             rc = 1
             continue
         text = path.read_text(encoding="utf-8")
-        spliced = strip_and_splice_trust_fields(text, existing_disk_text=text, actor=actor)
+        try:
+            spliced = strip_and_splice_trust_fields(text, existing_disk_text=text, actor=args.by)
+        except ValueError as e:
+            print(f"{path.name}: {e}", file=sys.stderr)
+            rc = 1
+            continue
         path.write_text(spliced, encoding="utf-8")
-        print(f"Stamped {path.name} (by: {actor})")
+        print(f"Stamped {path.name} (by: {args.by})")
     return rc
 
 

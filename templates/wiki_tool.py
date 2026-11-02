@@ -31,6 +31,7 @@ Checks run by lint:
 
 import argparse
 import datetime
+import hashlib
 import json
 import math
 import os
@@ -190,6 +191,27 @@ def _split_trust(fm_lines: list[str]) -> tuple[list[str], list[str]]:
     return kept, verified
 
 
+def _split_verified(fm_lines: list[str]) -> tuple[list[str], list[str]]:
+    """Split frontmatter lines into (all other lines including generated, `verified:` block lines)."""
+    kept: list[str] = []
+    verified: list[str] = []
+    current = None
+    for line in fm_lines:
+        if current and line.startswith((" ", "\t")):
+            if current == "verified":
+                verified.append(line)
+            else:
+                kept.append(line)
+            continue
+        key = line.split(":", 1)[0].strip().strip("'\"") if ":" in line and not line.startswith((" ", "\t", "#")) else None
+        current = key if key == "verified" else None
+        if current == "verified":
+            verified.append(line)
+        else:
+            kept.append(line)
+    return kept, verified
+
+
 def _frontmatter_end(lines: list[str]) -> int:
     """body_start(), but an opening `---` with no closing line is an error, not a page without frontmatter."""
     start = body_start(lines)
@@ -239,6 +261,27 @@ def strip_and_splice_trust_fields(
         return "---\n" + "".join(disk_verified) + gen_line + "---\n\n" + text
     kept = _split_trust(lines[1:start - 1])[0]
     return lines[0] + "".join(kept + disk_verified) + gen_line + "".join(lines[start - 1:])
+
+
+def page_hash(text: str) -> str:
+    """Canonical 16-hex content hash of a page, excluding trust fields (generated & verified),
+    with normalized line endings (\\r\\n -> \\n) and exactly one trailing newline."""
+    cleaned = strip_trust_fields(text)
+    normalized = cleaned.replace("\r\n", "\n").rstrip("\n") + "\n"
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def set_verified_field(text: str, by: str, at: str, sha: str) -> str:
+    """Stamp or update verified: { by, at, sha } in frontmatter."""
+    if not ACTOR_RE.match(by):
+        raise ValueError(f"Invalid actor {by!r}: use 1-64 letters, digits or . _ @ : -")
+    verified_line = f'verified: {{ by: "{by}", at: "{at}", sha: "{sha}" }}\n'
+    lines = text.splitlines(keepends=True)
+    start = _frontmatter_end(lines)
+    if not start:
+        return "---\n" + verified_line + "---\n\n" + text
+    kept = _split_verified(lines[1:start - 1])[0]
+    return lines[0] + "".join(kept) + verified_line + "".join(lines[start - 1:])
 
 
 def _split_top(s: str) -> list[str]:
@@ -433,6 +476,7 @@ def parse_page(path: Path, text: str | None = None) -> dict:
             "aliases": aliases,
             "atoms": atoms,
             "last_updated": fm.get("last_updated", ""),
+            "verified": fm.get("verified"),
             "wiki_links": wiki_links_in(text),
             "has_frontmatter": True,
         }
@@ -485,7 +529,7 @@ def cmd_lint(args) -> int:
         entries[p.name] = parse_page(p)
 
     page_names = set(entries.keys())
-    issues: dict[str, list[tuple[str, str]]] = {c: [] for c in "GBCDHIJK"}
+    issues: dict[str, list[tuple[str, str]]] = {c: [] for c in "GBCDHIJKV"}
 
     # G — Frontmatter
     legacy_pages = []
@@ -557,6 +601,19 @@ def cmd_lint(args) -> int:
     for a, b, score, shared in _similar_pairs(entries, getattr(args, "dup_threshold", 0.5)):
         issues["K"].append((a, f"similar to {b} ({score:.0%} shared words: {', '.join(shared)}): merge them, or link and narrow each"))
 
+    # V — Stale verification (content changed since human review)
+    for name, e in entries.items():
+        if not e["has_frontmatter"]:
+            continue
+        v = e.get("verified")
+        if isinstance(v, dict) and v.get("sha"):
+            page_text = (WIKI / name).read_text(encoding="utf-8")
+            actual_hash = page_hash(page_text)
+            if v["sha"] != actual_hash:
+                reviewer = v.get("by", "human")
+                at_date = v.get("at", "unknown")
+                issues["V"].append((name, f"content changed since review by {reviewer} on {at_date} (sha {v['sha']} != {actual_hash})"))
+
     # ── Report ────────────────────────────────────────────────────────────────
     labels = {
         "G": "Frontmatter issues",
@@ -567,9 +624,10 @@ def cmd_lint(args) -> int:
         "I": "Missing atoms (commands, error fixes, facts, decisions)",
         "J": f"Long pages (over {max_lines} lines)",
         "K": "Likely duplicates (similar title, aliases, summary and atoms)",
+        "V": "Stale verification (content changed since human review)",
     }
     # In strict mode only G-data-errors, C, and H are hard errors that block commits.
-    # G-legacy (missing frontmatter), B, D, I, J, and K are soft warnings.
+    # G-legacy (missing frontmatter), B, D, I, J, K, and V are soft warnings.
     strict = getattr(args, "strict", False)
     limit = None if getattr(args, "all", False) else max(1, getattr(args, "limit", 20))
 
@@ -581,9 +639,9 @@ def cmd_lint(args) -> int:
         return 0
 
     n = 1
-    for check in "GBCDHIJK":
+    for check in "GBCDHIJKV":
         items = issues[check]
-        soft_tag = "  [warning — not blocking]" if strict and check in ("B", "D", "I", "J", "K") else ""
+        soft_tag = "  [warning — not blocking]" if strict and check in ("B", "D", "I", "J", "K", "V") else ""
 
         if check == "G":
             leg_count = len(legacy_pages)
@@ -1110,6 +1168,43 @@ def cmd_stamp(args) -> int:
     return rc
 
 
+def cmd_hash(args) -> int:
+    path = WIKI / f"{_page_slug(args.page)}.md"
+    if not path.is_file():
+        print(f"No page '{path.stem}'.", file=sys.stderr)
+        return 1
+    print(page_hash(path.read_text(encoding="utf-8")))
+    return 0
+
+
+def cmd_verify(args) -> int:
+    actor = getattr(args, "by", "human") or "human"
+    if not ACTOR_RE.match(actor):
+        print(f"Invalid actor {actor!r}: use 1-64 letters, digits or . _ @ : -", file=sys.stderr)
+        return 1
+    by = actor if actor.startswith("human:") else f"human:{actor}"
+    at_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    rc = 0
+    for page in args.pages:
+        path = WIKI / f"{_page_slug(page)}.md"
+        if not path.is_file():
+            print(f"No page '{path.stem}'.", file=sys.stderr)
+            rc = 1
+            continue
+        text = path.read_text(encoding="utf-8")
+        h = page_hash(text)
+        try:
+            spliced = set_verified_field(text, by=by, at=at_iso, sha=h)
+        except ValueError as e:
+            print(f"{path.name}: {e}", file=sys.stderr)
+            rc = 1
+            continue
+        path.write_text(spliced, encoding="utf-8")
+        print(f"Verified {path.name} (by: {by}, sha: {h})")
+    return rc
+
+
 def cmd_pending(_args) -> int:
     if not RAW.is_dir():
         print("No pending raw sources.")
@@ -1209,6 +1304,13 @@ def main():
     stamp_p.add_argument("pages", nargs="+", help="Page slug(s) or filename(s)")
     stamp_p.add_argument("--by", default="local", help="Actor identity (default: 'local')")
 
+    hash_p = sub.add_parser("hash", help="Print canonical page hash (excluding trust fields)")
+    hash_p.add_argument("page", help="Page slug or filename")
+
+    verify_p = sub.add_parser("verify", help="Stamp verified trust field on one or more wiki pages")
+    verify_p.add_argument("pages", nargs="+", help="Page slug(s) or filename(s)")
+    verify_p.add_argument("--by", default="human", help="Reviewer identity (default: 'human')")
+
     sub.add_parser("pending", help="List raw/ files not cited by any wiki page")
 
     conv_p = sub.add_parser("convert-legacy", help="Convert legacy pages to frontmatter (dry run unless --apply)")
@@ -1221,7 +1323,8 @@ def main():
         sys.exit(cmd_lint(args))
     else:
         sys.exit({"search": cmd_search, "links": cmd_links, "sections": cmd_sections,
-                  "index-add": cmd_index_add, "set-atoms": cmd_set_atoms, "stamp": cmd_stamp, "pending": cmd_pending,
+                  "index-add": cmd_index_add, "set-atoms": cmd_set_atoms, "stamp": cmd_stamp,
+                  "hash": cmd_hash, "verify": cmd_verify, "pending": cmd_pending,
                   "convert-legacy": cmd_convert_legacy, "rotate-log": cmd_rotate_log}[args.command](args))
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime
 import functools
 import hashlib
 import hmac
@@ -45,7 +46,16 @@ if str(ROOT / "scripts") not in sys.path:
 if str(ROOT / "templates") not in sys.path:
     sys.path.insert(0, str(ROOT / "templates"))
 import forge  # noqa: E402
-from wiki_tool import body_start, code_line_indices, strip_and_splice_trust_fields, strip_trust_fields  # noqa: E402
+from wiki_tool import (  # noqa: E402
+    ACTOR_RE,
+    body_start,
+    code_line_indices,
+    page_hash,
+    parse_frontmatter,
+    set_verified_field,
+    strip_and_splice_trust_fields,
+    strip_trust_fields,
+)
 
 
 def server_version() -> str:
@@ -639,6 +649,47 @@ def edit_page(
     return write_page(lobe, page["slug"], text, index_section, index_description, log_entry, expected_sha=page["sha"], actor=actor)
 
 
+@serialized
+def verify_page(
+    lobe: str,
+    slug: str,
+    expected_sha: str,
+    by: str | None = None,
+) -> dict[str, Any]:
+    """Human verification of a wiki page pinned by expected_sha content hash."""
+    clean_slug = page_name(slug)
+    if not SLUG_RE.match(clean_slug):
+        raise ValueError(f"Invalid page slug: {slug!r} (expected lowercase letters, digits, hyphens)")
+    paths = l_paths(lobe)
+    page_file = paths["WIKI"] / f"{clean_slug}.md"
+    if not page_file.is_file():
+        raise FileNotFoundError(f"Page '{clean_slug}' not found in lobe '{lobe}'")
+
+    text = page_file.read_text(encoding="utf-8")
+    current_hash = page_hash(text)
+    if expected_sha != current_hash:
+        raise RuntimeError(f"Page content hash {current_hash} does not match expected_sha {expected_sha}")
+
+    actor = (by or "").strip() or "human"
+    if not ACTOR_RE.match(actor):
+        raise ValueError(f"Invalid actor {actor!r}: use 1-64 letters, digits or . _ @ : -")
+    by_val = actor if (actor == "human" or actor.startswith("human:")) else f"human:{actor}"
+    at_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    final_content = set_verified_field(text, by=by_val, at=at_iso, sha=current_hash)
+    page_file.write_text(final_content, encoding="utf-8")
+
+    staged = [str(page_file.relative_to(paths["REPO"]))]
+    git_info = git_commit_and_optional_push(paths["REPO"], f"wiki: verify {clean_slug}", staged)
+    return {
+        "lobe": lobe,
+        "slug": clean_slug,
+        "sha": page_sha(final_content),
+        "verified": {"by": by_val, "at": at_iso, "sha": current_hash},
+        **git_info,
+    }
+
+
 # ── Part 2: MCP Tool Definitions & JSON-RPC 2.0 Dispatcher ──────────────────
 
 MCP_TOOLS: list[dict[str, Any]] = [
@@ -869,6 +920,20 @@ MCP_TOOLS: list[dict[str, Any]] = [
             "required": ["lobe", "slug", "edits"],
         },
     },
+    {
+        "name": "lobe_verify_page",
+        "description": "Stamp human verification on a wiki page with expected_sha content hash. Fails if page content changed since expected_sha.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "lobe": {"type": "string"},
+                "slug": {"type": "string"},
+                "expected_sha": {"type": "string", "description": "Canonical content hash (excluding trust fields) from page read or hash command."},
+                "by": {"type": "string", "description": "Optional human reviewer identity (e.g. 'human:jijin' or 'jijin')."},
+            },
+            "required": ["lobe", "slug", "expected_sha"],
+        },
+    },
 ]
 
 
@@ -936,6 +1001,13 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
         return edit_page(
             args["lobe"], args["slug"], args["edits"], args.get("expected_sha"), args.get("log_entry"),
             args.get("index_section"), args.get("index_description"), actor=args.get("actor"),
+        )
+    if name == "lobe_verify_page":
+        return verify_page(
+            lobe=args["lobe"],
+            slug=args["slug"],
+            expected_sha=args["expected_sha"],
+            by=args.get("by"),
         )
     raise ValueError(f"Unknown MCP tool: {name!r}")
 
@@ -1022,15 +1094,16 @@ def introspection_endpoint(issuer: str) -> str:
 
 
 # shortcut: in-memory cache per process, emptied on restart; fine for one lobe-server container.
-_TOKEN_CACHE: dict[str, float] = {}
+_TOKEN_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _TOKEN_CACHE_TTL = 60.0
 
 
-def introspect_token(token: str) -> bool:
-    """Validate an OAuth access token with the issuer's RFC 7662 introspection endpoint."""
+def introspect_token_info(token: str) -> dict[str, Any] | None:
+    """Validate an OAuth access token with the issuer's RFC 7662 introspection endpoint, returning token info dict."""
     now = time.time()
-    if _TOKEN_CACHE.get(token, 0) > now:
-        return True
+    cached = _TOKEN_CACHE.get(token)
+    if cached and cached[0] > now:
+        return cached[1]
     client_id = os.environ.get("LOBE_OAUTH_CLIENT_ID", "").strip()
     secret = os.environ.get("LOBE_OAUTH_CLIENT_SECRET", "").strip()
     try:
@@ -1046,35 +1119,164 @@ def introspect_token(token: str) -> bool:
         with urllib.request.urlopen(req, timeout=5) as resp:
             info = json.loads(resp.read())
     except Exception:
-        return False  # fail closed when the authorization server is unreachable
+        return None  # fail closed when the authorization server is unreachable
     if not info.get("active"):
-        return False
-    # Reject tokens issued to other applications on the same authorization server.
-    if info.get("client_id") and info["client_id"] != client_id:
-        return False
+        return None
+    allowed_clients = {client_id}
+    human_client_id = os.environ.get("LOBE_HUMAN_CLIENT_ID", "").strip()
+    if human_client_id:
+        allowed_clients.add(human_client_id)
+    allowed_clients.discard("")
+    if allowed_clients and info.get("client_id") and info["client_id"] not in allowed_clients:
+        return None
     for k, v in list(_TOKEN_CACHE.items()):
-        if v <= now:
+        if v[0] <= now:
             _TOKEN_CACHE.pop(k, None)  # not del: another request thread may have pruned it already
-    _TOKEN_CACHE[token] = min(now + _TOKEN_CACHE_TTL, float(info.get("exp", now + _TOKEN_CACHE_TTL)))
-    return True
+    exp = min(now + _TOKEN_CACHE_TTL, float(info.get("exp", now + _TOKEN_CACHE_TTL)))
+    _TOKEN_CACHE[token] = (exp, info)
+    return info
+
+
+def introspect_token(token: str) -> bool:
+    """Validate an OAuth access token with the issuer's RFC 7662 introspection endpoint."""
+    return introspect_token_info(token) is not None
 
 
 def check_auth(auth_header: str | None) -> bool:
     expected = os.environ.get("LOBE_API_TOKEN", "").strip()
-    if not expected and not oauth_issuer():
+    human = os.environ.get("LOBE_HUMAN_TOKEN", "").strip()
+    if not expected and not human and not oauth_issuer():
         return True
     if not auth_header or not auth_header.startswith("Bearer "):
         return False
     token = auth_header.removeprefix("Bearer ").strip()
     if expected and hmac.compare_digest(token.encode(), expected.encode()):
         return True
+    if human and hmac.compare_digest(token.encode(), human.encode()):
+        return True
     return bool(oauth_issuer()) and introspect_token(token)
 
 
-def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | None = None) -> tuple[int, Any]:
+def check_human_auth(auth_header: str | None) -> tuple[bool, str | None]:
+    """
+    Check if the caller has human verification credentials.
+    Returns (is_human, reviewer_identity).
+    - If server has no auth configured (open dev), returns (True, "human").
+    - If LOBE_HUMAN_TOKEN matches Bearer token, returns (True, "human").
+    - If OAuth token matches LOBE_HUMAN_CLIENT_ID or has LOBE_HUMAN_SCOPE (default: lobe:verify),
+      returns (True, username/sub).
+    - If only LOBE_API_TOKEN or a non-human OAuth token is provided, returns (False, None).
+    """
+    expected = os.environ.get("LOBE_API_TOKEN", "").strip()
+    human = os.environ.get("LOBE_HUMAN_TOKEN", "").strip()
+    issuer = oauth_issuer()
+    if not expected and not human and not issuer:
+        return True, "human"
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return False, None
+    token = auth_header.removeprefix("Bearer ").strip()
+    if human and hmac.compare_digest(token.encode(), human.encode()):
+        return True, "human"
+    if issuer:
+        info = introspect_token_info(token)
+        if not info:
+            return False, None
+        human_client_id = os.environ.get("LOBE_HUMAN_CLIENT_ID", "").strip()
+        human_scope = os.environ.get("LOBE_HUMAN_SCOPE", "lobe:verify").strip()
+        token_client = info.get("client_id", "")
+        token_scopes = info.get("scope", "").split() if isinstance(info.get("scope"), str) else []
+        if (human_client_id and token_client == human_client_id) or (human_scope and human_scope in token_scopes):
+            reviewer = info.get("username") or info.get("sub") or info.get("email") or "human"
+            return True, reviewer
+    return False, None
+
+
+def _render_verify_html(lobe: str, slug: str, current_hash: str, verified_info: dict[str, Any] | None) -> str:
+    is_verified = bool(isinstance(verified_info, dict) and verified_info.get("sha"))
+    is_stale = bool(is_verified and verified_info.get("sha") != current_hash)
+    if is_stale:
+        badge = '<span class="badge badge-stale">Stale (Changed since review)</span>'
+        desc = f'<p>Reviewed by <code>{verified_info.get("by", "unknown")}</code> on <code>{verified_info.get("at", "unknown")}</code> (reviewed sha: <code>{verified_info.get("sha")}</code>).</p>'
+    elif is_verified:
+        badge = '<span class="badge badge-ok">Verified</span>'
+        desc = f'<p>Verified by <code>{verified_info.get("by", "unknown")}</code> on <code>{verified_info.get("at", "unknown")}</code>.</p>'
+    else:
+        badge = '<span class="badge badge-unverified">Unverified</span>'
+        desc = '<p>This page has not been human-reviewed yet.</p>'
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Verify {lobe}/{slug}</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px; color: #1f2328; }}
+    h1 {{ font-size: 1.4rem; border-bottom: 1px solid #d0d7de; padding-bottom: 10px; }}
+    .badge {{ display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 0.85rem; font-weight: 600; }}
+    .badge-ok {{ background: #dafbe1; color: #1a7f37; }}
+    .badge-stale {{ background: #ffebe9; color: #cf222e; }}
+    .badge-unverified {{ background: #fff8c5; color: #9a6700; }}
+    .box {{ background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; margin: 20px 0; }}
+    code {{ background: #eff1f3; padding: 2px 6px; border-radius: 3px; font-family: monospace; font-size: 0.9em; }}
+    button {{ background: #1f883d; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-size: 1rem; cursor: pointer; }}
+    button:hover {{ background: #1a7f37; }}
+  </style>
+</head>
+<body>
+  <h1>Verify Wiki Page: <code>{lobe} / {slug}</code></h1>
+  <div class="box">
+    <p><strong>Current Canonical Hash:</strong> <code>{current_hash}</code></p>
+    <p><strong>Status:</strong> {badge}</p>
+    {desc}
+  </div>
+  <form method="POST">
+    <input type="hidden" name="expected_sha" value="{current_hash}">
+    <button type="submit">Verify this page (sha: {current_hash})</button>
+  </form>
+</body>
+</html>"""
+
+
+def _render_verify_success_html(lobe: str, slug: str, res: dict[str, Any]) -> str:
+    v = res.get("verified", {})
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Page Verified</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px; color: #1f2328; }}
+    h1 {{ font-size: 1.4rem; border-bottom: 1px solid #d0d7de; padding-bottom: 10px; }}
+    .box {{ background: #dafbe1; border: 1px solid #4ac26b; border-radius: 6px; padding: 16px; margin: 20px 0; color: #1a7f37; }}
+    code {{ background: #eff1f3; padding: 2px 6px; border-radius: 3px; font-family: monospace; font-size: 0.9em; color: #1f2328; }}
+    a {{ color: #0969da; text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+  </style>
+</head>
+<body>
+  <h1>Verification Confirmed</h1>
+  <div class="box">
+    <p>Page <strong>{slug}</strong> in lobe <strong>{lobe}</strong> has been successfully verified.</p>
+    <p>Hash: <code>{v.get('sha')}</code> &bull; Reviewer: <code>{v.get('by')}</code> &bull; Timestamp: <code>{v.get('at')}</code></p>
+  </div>
+  <p><a href="/api/lobes/{lobe}/pages/{slug}/verify">&larr; Back to verification status</a></p>
+</body>
+</html>"""
+
+
+def dispatch_http(
+    method: str,
+    raw_path: str,
+    body: bytes,
+    auth_header: str | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, Any]:
     parsed = urlparse(raw_path)
     path = parsed.path.rstrip("/") or "/"
     query = parse_qs(parsed.query)
+
+    if not auth_header and "token" in query:
+        auth_header = f"Bearer {query['token'][0]}"
 
     if method == "GET" and path == "/health":
         return 200, {"status": "ok"}
@@ -1088,7 +1290,14 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
     try:
         payload = json.loads(body.decode("utf-8")) if body else {}
     except Exception:
-        return 400, {"error": "Invalid JSON body"}
+        if body:
+            parsed_form = parse_qs(body.decode("utf-8"))
+            if parsed_form:
+                payload = {k: v[0] for k, v in parsed_form.items()}
+            else:
+                return 400, {"error": "Invalid JSON body"}
+        else:
+            payload = {}
 
     try:
         if method == "POST" and path == "/mcp":
@@ -1109,6 +1318,47 @@ def dispatch_http(method: str, raw_path: str, body: bytes, auth_header: str | No
         # /api/lobes/{lobe}/...
         if len(parts) >= 4 and parts[0] == "api" and parts[1] == "lobes":
             lobe, sub, n = parts[2], parts[3], len(parts)
+
+            # Verification endpoint: /api/lobes/{lobe}/pages/{slug}/verify
+            if sub == "pages" and n == 6 and parts[5] == "verify":
+                slug = parts[4]
+                accept_hdr = next((v for k, v in (headers or {}).items() if k.lower() == "accept"), "")
+                wants_html = "text/html" in accept_hdr
+                if method == "GET":
+                    clean_slug = page_name(slug)
+                    paths = l_paths(lobe)
+                    page_file = paths["WIKI"] / f"{clean_slug}.md"
+                    if not page_file.is_file():
+                        return 404, {"error": f"Page '{clean_slug}' not found in lobe '{lobe}'"}
+                    text = page_file.read_text(encoding="utf-8")
+                    curr_hash = page_hash(text)
+                    fm, _ = parse_frontmatter(text)
+                    v_info = fm.get("verified") if isinstance(fm, dict) else None
+                    if wants_html:
+                        return 200, _render_verify_html(lobe, clean_slug, curr_hash, v_info)
+                    is_ver = bool(isinstance(v_info, dict) and v_info.get("sha"))
+                    is_stale = bool(is_ver and v_info.get("sha") != curr_hash)
+                    return 200, {
+                        "lobe": lobe,
+                        "slug": clean_slug,
+                        "sha": curr_hash,
+                        "verified": v_info,
+                        "is_verified": is_ver,
+                        "is_stale": is_stale,
+                    }
+                if method == "POST":
+                    is_human, reviewer = check_human_auth(auth_header)
+                    if not is_human:
+                        return 403, {"error": "Forbidden: human verification credential required"}
+                    expected_sha = payload.get("expected_sha")
+                    if not expected_sha:
+                        return 400, {"error": "Missing required field: expected_sha"}
+                    by = payload.get("by") or reviewer
+                    res = verify_page(lobe, slug, expected_sha=expected_sha, by=by)
+                    if wants_html:
+                        return 200, _render_verify_success_html(lobe, slug, res)
+                    return 200, res
+
             route = {
                 ("GET", "skills", 4): ("lobe_generate_skills", {"mode": query.get("mode", ["mcp"])[0]}),
                 ("PUT", "remote", 4): ("lobe_configure_remote", payload),
@@ -1160,11 +1410,30 @@ class LobeHTTPHandler(BaseHTTPRequestHandler):
             status, data = (413, {"error": f"Body over {MAX_BODY} bytes"}) if length > 0 else (400, {"error": "Invalid Content-Length"})
         else:
             body = self.rfile.read(length) if length else b""
-            status, data = dispatch_http(method, self.path, body, self.headers.get("Authorization"))
-        out = json.dumps(data).encode("utf-8")
+            status, data = dispatch_http(
+                method,
+                self.path,
+                body,
+                self.headers.get("Authorization"),
+                headers=dict(self.headers),
+            )
+        if isinstance(data, str):
+            out = data.encode("utf-8")
+            content_type = "text/html; charset=utf-8"
+        else:
+            out = json.dumps(data).encode("utf-8")
+            content_type = "application/json"
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(out)))
+        if status == 401 and oauth_issuer():
+            public = os.environ.get("LOBE_PUBLIC_URL", "").strip().rstrip("/")
+            self.send_header(
+                "WWW-Authenticate",
+                f'Bearer resource_metadata="{public}/.well-known/oauth-protected-resource"',
+            )
+        self.end_headers()
+        self.wfile.write(out)
         if status == 401 and oauth_issuer():
             public = os.environ.get("LOBE_PUBLIC_URL", "").strip().rstrip("/")
             self.send_header(

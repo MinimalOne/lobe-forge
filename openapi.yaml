@@ -445,6 +445,61 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /api/lobes/{lobe}/pages/{slug}/verify:
+    parameters:
+      - $ref: "#/components/parameters/LobeName"
+      - name: slug
+        in: path
+        required: true
+        description: Lowercase hyphenated wiki page slug (without `.md`)
+        schema:
+          type: string
+          pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
+    get:
+      operationId: getVerifyWikiPage
+      summary: Get verification status or HTML verification confirmation page
+      responses:
+        "200":
+          description: Verification status or HTML page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifyStatusResponse"
+            text/html:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    post:
+      operationId: verifyWikiPage
+      summary: Stamp human verification on a wiki page pinned by expected_sha
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyPageRequest"
+      responses:
+        "200":
+          description: Page verified and committed locally
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifyPageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /mcp:
     post:
       operationId: handleMcpJsonRpc
@@ -510,6 +565,12 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
     Conflict:
       description: Operation failed due to conflict or command error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Action forbidden (e.g. human verification credential required)
       content:
         application/json:
           schema:
@@ -842,6 +903,67 @@ components:
               type: string
               description: Short SHA-256 of the page after the write
         - $ref: "#/components/schemas/GitCommitStatus"
+
+    VerifyPageRequest:
+      type: object
+      required: [expected_sha]
+      properties:
+        expected_sha:
+          type: string
+          description: Canonical content hash (excluding trust fields) expected for the page
+        by:
+          type: string
+          description: Optional human reviewer identity (e.g. 'jijin' or 'human:jijin')
+
+    VerifyPageResponse:
+      allOf:
+        - type: object
+          required: [lobe, slug, sha, verified]
+          properties:
+            lobe:
+              type: string
+            slug:
+              type: string
+            sha:
+              type: string
+              description: Short SHA-256 of the page after verification
+            verified:
+              type: object
+              required: [by, at, sha]
+              properties:
+                by:
+                  type: string
+                at:
+                  type: string
+                sha:
+                  type: string
+        - $ref: "#/components/schemas/GitCommitStatus"
+
+    VerifyStatusResponse:
+      type: object
+      required: [lobe, slug, sha, is_verified, is_stale]
+      properties:
+        lobe:
+          type: string
+        slug:
+          type: string
+        sha:
+          type: string
+          description: Current canonical page content hash
+        verified:
+          type: object
+          nullable: true
+          properties:
+            by:
+              type: string
+            at:
+              type: string
+            sha:
+              type: string
+        is_verified:
+          type: boolean
+        is_stale:
+          type: boolean
 
     JsonRpcRequest:
       type: object

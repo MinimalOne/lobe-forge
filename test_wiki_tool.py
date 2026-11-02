@@ -9,10 +9,15 @@ if str(TEMPLATES_DIR) not in sys.path:
 
 from wiki_tool import (
     body_start,
+    cmd_hash,
+    cmd_lint,
     cmd_stamp,
+    cmd_verify,
     code_line_indices,
     mask_code,
+    page_hash,
     parse_frontmatter,
+    set_verified_field,
     strip_and_splice_trust_fields,
     strip_trust_fields,
     wiki_links_in,
@@ -312,6 +317,124 @@ verified: { by: "human:jijin", at: "2026-11-01", sha: "111" }
         assert 'verified: { by: "human:jijin", at: "2026-11-01", sha: "111" }' in updated
         assert 'generated: { by: "test-local"' in updated
         assert (wiki_dir / "broken.md").read_text() == "---\ntitle: no close\n"
+
+
+def test_page_hash():
+    base = "---\ntitle: Foo\n---\n\n# Foo\n\nSome body text.\n"
+    h1 = page_hash(base)
+    assert len(h1) == 16
+    # Trust fields do not alter hash
+    with_gen = "---\ntitle: Foo\ngenerated: { by: \"agent\", at: \"2026-11-01\" }\n---\n\n# Foo\n\nSome body text.\n"
+    assert page_hash(with_gen) == h1
+    with_ver = "---\ntitle: Foo\nverified: { by: \"human:jijin\", at: \"2026-11-01\", sha: \"abc\" }\n---\n\n# Foo\n\nSome body text.\n"
+    assert page_hash(with_ver) == h1
+    # CRLF normalized to LF
+    with_crlf = "---\r\ntitle: Foo\r\n---\r\n\r\n# Foo\r\n\r\nSome body text.\r\n"
+    assert page_hash(with_crlf) == h1
+    # Trailing newlines normalized to single newline
+    assert page_hash(base.rstrip("\n")) == h1
+    assert page_hash(base + "\n\n\n") == h1
+    # Actual content difference produces different hash
+    diff = "---\ntitle: Foo\n---\n\n# Foo\n\nDifferent text.\n"
+    assert page_hash(diff) != h1
+
+
+def test_set_verified_field():
+    base = "---\ntitle: Foo\ngenerated: { by: \"agent-1\", at: \"2026-11-01\" }\n---\n\n# Foo\n"
+    stamped = set_verified_field(base, by="human:reviewer", at="2026-11-02T12:00:00Z", sha="1234567890abcdef")
+    assert 'generated: { by: "agent-1", at: "2026-11-01" }' in stamped
+    assert 'verified: { by: "human:reviewer", at: "2026-11-02T12:00:00Z", sha: "1234567890abcdef" }' in stamped
+
+    # Overwrites existing verified
+    updated = set_verified_field(stamped, by="human:second", at="2026-11-03T12:00:00Z", sha="fedcba0987654321")
+    assert 'by: "human:reviewer"' not in updated
+    assert 'verified: { by: "human:second", at: "2026-11-03T12:00:00Z", sha: "fedcba0987654321" }' in updated
+    assert 'generated: { by: "agent-1"' in updated
+
+    # Rejects invalid actor
+    import pytest
+    with pytest.raises(ValueError, match="Invalid actor"):
+        set_verified_field(base, by="bad actor with spaces", at="now", sha="123")
+
+
+def test_cmd_hash_and_cmd_verify(capsys):
+    import argparse
+    import tempfile
+    import wiki_tool
+
+    with tempfile.TemporaryDirectory() as tmp:
+        wiki_dir = Path(tmp) / "wiki"
+        wiki_dir.mkdir()
+        page_file = wiki_dir / "test-page.md"
+        page_file.write_text("---\ntitle: Test\n---\n\n# Content\n")
+
+        saved = wiki_tool.WIKI
+        wiki_tool.WIKI = wiki_dir
+        try:
+            # Test cmd_hash
+            rc = cmd_hash(argparse.Namespace(page="test-page"))
+            assert rc == 0
+            captured = capsys.readouterr()
+            expected_h = page_hash(page_file.read_text())
+            assert captured.out.strip() == expected_h
+
+            # Test cmd_hash missing
+            assert cmd_hash(argparse.Namespace(page="missing")) == 1
+
+            # Test cmd_verify
+            rc = cmd_verify(argparse.Namespace(pages=["test-page.md"], by="jijin"))
+            assert rc == 0
+            content = page_file.read_text()
+            assert f'verified: {{ by: "human:jijin", at:' in content
+            assert f'sha: "{expected_h}"' in content
+
+            # Test cmd_verify invalid actor
+            assert cmd_verify(argparse.Namespace(pages=["test-page"], by="bad actor")) == 1
+        finally:
+            wiki_tool.WIKI = saved
+
+
+def test_cmd_lint_verified_rule_v(capsys):
+    import argparse
+    import tempfile
+    import wiki_tool
+
+    with tempfile.TemporaryDirectory() as tmp:
+        wiki_dir = Path(tmp) / "wiki"
+        wiki_dir.mkdir()
+        index_file = wiki_dir / "index.md"
+        index_file.write_text("# Index\n\n- [[verified-page]] — A verified page\n")
+
+        page_file = wiki_dir / "verified-page.md"
+        content = "---\ntitle: Verified Page\nsummary: Summary\nlast_updated: 2026-11-01\nsource_count: 0\nprovenance: \"test notes\"\natoms:\n  - Atom fact\n---\n\n## Section\n\nContent here.\n"
+        h = page_hash(content)
+        ver_content = set_verified_field(content, by="human:tester", at="2026-11-01T10:00:00Z", sha=h)
+        page_file.write_text(ver_content)
+
+        saved_wiki = wiki_tool.WIKI
+        saved_index = wiki_tool.INDEX
+        wiki_tool.WIKI = wiki_dir
+        wiki_tool.INDEX = index_file
+        try:
+            # Unmodified page: Rule V produces no warnings
+            rc = cmd_lint(argparse.Namespace(strict=True, limit=20, all=False))
+            captured = capsys.readouterr()
+            assert "Stale verification" not in captured.out
+
+            # Modify page content without updating verification
+            tampered = ver_content + "\nExtra unstamped modifications.\n"
+            page_file.write_text(tampered)
+
+            # Strict mode: Rule V is reported as a soft warning, not blocking (rc == 0)
+            rc = cmd_lint(argparse.Namespace(strict=True, limit=20, all=False))
+            assert rc == 0
+            captured = capsys.readouterr()
+            assert "Stale verification" in captured.out
+            assert "content changed since review by human:tester on 2026-11-01T10:00:00Z" in captured.out
+            assert f"sha {h} !=" in captured.out
+        finally:
+            wiki_tool.WIKI = saved_wiki
+            wiki_tool.INDEX = saved_index
 
 
 if __name__ == "__main__":

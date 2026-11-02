@@ -32,6 +32,7 @@ skills/         the {{NAME}}-add-raw / -ingest / -ask / -lint skills (symlinked 
 ```markdown
 ---
 title: Page Title
+type: Note
 summary: One sentence (15-40 words) saying what this page is.
 aliases:
   - Other Name
@@ -56,6 +57,8 @@ Content with [[wiki-links]] and (source: source-file.md) after factual claims.
 - [[related-page]]
 ```
 
+- `type` is one of `Note` (default, 90-day lifecycle), `Runbook` (180-day lifecycle), `Decision` (permanent), `Reference` (365-day lifecycle), `Session` (dated notes/transcripts, permanent), or `Todo` (90-day lifecycle). Determines lifecycle staleness defaults.
+- `stale_after` (optional) overrides the type's default staleness period (e.g. `YYYY-MM-DD`).
 - `source_count` must equal the number of `sources` items.
 - `sources` lists files under `{{RAW}}/`; anything else (conversations, links not saved) goes in `provenance`.
 - `aliases` (optional) are other names for the same thing; search matches them.

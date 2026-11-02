@@ -12,6 +12,7 @@ Commands:
   set-atoms       Write or replace the frontmatter atoms: list on a wiki page
   pending         List raw/ sources not cited by any wiki page
   convert-legacy  Move legacy bold Summary/Sources/Last updated lines into frontmatter
+  set-type        Set or infer frontmatter type on wiki pages
   rotate-log      Move log.md entries from earlier months into log/<YYYY-MM>.md
 
 Paths default to this repo's layout (wiki/, raw/). Override with WIKI_ROOT, WIKI_DIR,
@@ -27,6 +28,9 @@ Checks run by lint:
   I  Missing atoms — frontmatter has no atoms: list          [quality]
   J  Long pages — over --max-lines (default 200)             [quality]
   K  Likely duplicates — similar title/aliases/summary/atoms [quality]
+  V  Stale verification — content changed since review       [quality]
+  T  Page types — missing or invalid type                    [quality]
+  S  Stale pages — past stale_after date                     [quality]
 """
 
 import argparse
@@ -269,6 +273,136 @@ def set_verified_field(text: str, by: str, at: str, sha: str) -> str:
     return lines[0] + "".join(kept) + verified_line + "".join(lines[start - 1:])
 
 
+PAGE_TYPES = {"Note", "Runbook", "Decision", "Reference", "Session", "Todo"}
+
+TYPE_DEFAULT_STALE_DAYS: dict[str, int | None] = {
+    "Note": 90,
+    "Runbook": 180,
+    "Decision": None,
+    "Reference": 365,
+    "Session": None,
+    "Todo": 90,
+}
+
+SESSION_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(-.*)?$")
+
+
+def canonical_page_type(val: str | None) -> str | None:
+    """Normalize page type to canonical casing (e.g. 'runbook' -> 'Runbook', 'todo' -> 'Todo').
+    Returns None if val is empty or not in PAGE_TYPES."""
+    if not val or not isinstance(val, str):
+        return None
+    s = val.strip()
+    for pt in PAGE_TYPES:
+        if pt.lower() == s.lower():
+            return pt
+    return None
+
+
+def infer_page_type(slug: str, text: str = "") -> str:
+    """Infer page type from slug pattern and content."""
+    clean = _page_slug(slug)
+    if SESSION_DATE_RE.match(clean):
+        return "Session"
+    if clean in ("todo", "todos") or clean.endswith("-todo") or clean.endswith("-todos"):
+        return "Todo"
+    if clean in ("runbook", "runbooks") or clean.startswith("runbook-") or clean.endswith("-runbook") or "-runbook-" in clean:
+        return "Runbook"
+    if clean in ("decision", "decisions") or clean.startswith("decision-") or clean.endswith("-decision") or "-decision-" in clean:
+        return "Decision"
+    if (
+        clean in ("reference", "references")
+        or clean.startswith("reference-")
+        or clean.endswith("-reference")
+        or clean.startswith("cheat-sheet")
+        or clean.endswith("-cheatsheet")
+        or clean.endswith("-spec")
+    ):
+        return "Reference"
+
+    if text:
+        fm, _ = parse_frontmatter(text)
+        if isinstance(fm, dict):
+            atoms = fm.get("atoms", [])
+            if isinstance(atoms, list) and atoms:
+                decisions = sum(1 for a in atoms if isinstance(a, str) and a.strip().startswith("decision:"))
+                if decisions == len(atoms):
+                    return "Decision"
+
+    return "Note"
+
+
+def effective_stale_after(entry: dict) -> tuple[datetime.date | None, str]:
+    """Calculate the effective stale_after date and reason for a page entry.
+    Returns (stale_date, reason) or (None, reason) if it never goes stale."""
+    status = (entry.get("status") or "").strip().lower()
+    if status in ("archived", "deprecated", "superseded"):
+        return None, f"status is {status}"
+
+    explicit = entry.get("stale_after")
+    if explicit:
+        try:
+            d_str = str(explicit).strip().split("T")[0]
+            return datetime.date.fromisoformat(d_str), f"explicit stale_after: {d_str}"
+        except (ValueError, TypeError):
+            pass
+
+    pt = canonical_page_type(entry.get("type"))
+    if not pt:
+        return None, "no page type"
+
+    days = TYPE_DEFAULT_STALE_DAYS.get(pt)
+    if days is None:
+        return None, f"{pt} pages do not expire"
+
+    base_str = None
+    if entry.get("last_updated"):
+        base_str = str(entry["last_updated"]).strip().split("T")[0]
+    elif isinstance(entry.get("generated"), dict) and entry["generated"].get("at"):
+        base_str = str(entry["generated"]["at"]).strip().split("T")[0]
+
+    if not base_str:
+        return None, "no base date (last_updated or generated.at)"
+
+    try:
+        base_date = datetime.date.fromisoformat(base_str)
+        stale_date = base_date + datetime.timedelta(days=days)
+        return stale_date, f"{pt} default ({days} days after {base_str})"
+    except (ValueError, TypeError):
+        return None, f"invalid base date: {base_str}"
+
+
+def set_page_type(text: str, page_type: str) -> str:
+    """Stamp or update type: <Type> in frontmatter."""
+    canon = canonical_page_type(page_type)
+    if not canon:
+        raise ValueError(f"Invalid page type {page_type!r}: choose from {', '.join(sorted(PAGE_TYPES))}")
+    lines = text.splitlines(keepends=True)
+    start = _frontmatter_end(lines)
+    type_line = f"type: {canon}\n"
+    if not start:
+        return "---\n" + type_line + "---\n\n" + text
+
+    fm_lines = lines[1:start - 1]
+    new_fm = []
+    type_found = False
+    for line in fm_lines:
+        if not line.startswith((" ", "\t", "#")) and line.split(":", 1)[0].strip().strip("'\"") == "type":
+            new_fm.append(type_line)
+            type_found = True
+        else:
+            new_fm.append(line)
+
+    if not type_found:
+        insert_idx = 0
+        for i, line in enumerate(new_fm):
+            if not line.startswith((" ", "\t", "#")) and line.split(":", 1)[0].strip().strip("'\"") in ("title", "summary"):
+                insert_idx = i + 1
+        new_fm.insert(insert_idx, type_line)
+
+    return lines[0] + "".join(new_fm) + "".join(lines[start - 1:])
+
+
 def _split_top(s: str) -> list[str]:
     """Split on ';' outside () and [] — legacy Sources lines use ';' between kinds of evidence."""
     out, depth, cur = [], 0, ""
@@ -454,6 +588,9 @@ def parse_page(path: Path, text: str | None = None) -> dict:
         return {
             "page": f"{WIKI.name}/{path.name}",
             "title": fm.get("title", ""),
+            "type": fm.get("type"),
+            "status": fm.get("status"),
+            "stale_after": fm.get("stale_after"),
             "summary": fm.get("summary", ""),
             "sources": sources,
             "source_count": sc,
@@ -462,6 +599,7 @@ def parse_page(path: Path, text: str | None = None) -> dict:
             "atoms": atoms,
             "last_updated": fm.get("last_updated", ""),
             "verified": fm.get("verified"),
+            "generated": fm.get("generated"),
             "wiki_links": wiki_links_in(text),
             "has_frontmatter": True,
         }
@@ -471,6 +609,9 @@ def parse_page(path: Path, text: str | None = None) -> dict:
     return {
         "page": f"{WIKI.name}/{path.name}",
         "title": fields.get("title", ""),
+        "type": None,
+        "status": None,
+        "stale_after": None,
         "summary": fields.get("summary", ""),
         "sources": sources,
         "source_count": len(sources),
@@ -478,6 +619,8 @@ def parse_page(path: Path, text: str | None = None) -> dict:
         "aliases": [],
         "atoms": [],
         "last_updated": fields.get("last_updated", ""),
+        "verified": None,
+        "generated": None,
         "wiki_links": wiki_links_in(text),
         "has_frontmatter": False,
     }
@@ -514,7 +657,7 @@ def cmd_lint(args) -> int:
         entries[p.name] = parse_page(p)
 
     page_names = set(entries.keys())
-    issues: dict[str, list[tuple[str, str]]] = {c: [] for c in "GBCDHIJKV"}
+    issues: dict[str, list[tuple[str, str]]] = {c: [] for c in "GBCDHIJKVTS"}
 
     # G — Frontmatter
     legacy_pages = []
@@ -599,6 +742,27 @@ def cmd_lint(args) -> int:
                 at_date = v.get("at", "unknown")
                 issues["V"].append((name, f"content changed since review by {reviewer} on {at_date} (sha {v['sha']} != {actual_hash})"))
 
+    # T — Page types (missing or invalid)
+    for name, e in entries.items():
+        if not e["has_frontmatter"]:
+            continue
+        raw_type = e.get("type")
+        if not raw_type:
+            issues["T"].append((name, f"missing frontmatter 'type' (choose from {', '.join(sorted(PAGE_TYPES))})"))
+        elif not canonical_page_type(raw_type):
+            issues["T"].append((name, f"invalid page type {raw_type!r} (choose from {', '.join(sorted(PAGE_TYPES))})"))
+
+    # S — Stale pages (past stale_after date)
+    today = datetime.date.today()
+    for name, e in entries.items():
+        if not e["has_frontmatter"]:
+            continue
+        stale_date, reason = effective_stale_after(e)
+        if stale_date and today >= stale_date:
+            days_ago = (today - stale_date).days
+            ago_str = "today" if days_ago == 0 else (f"1 day ago" if days_ago == 1 else f"{days_ago} days ago")
+            issues["S"].append((name, f"expired on {stale_date.isoformat()} ({ago_str}; {reason})"))
+
     # ── Report ────────────────────────────────────────────────────────────────
     labels = {
         "G": "Frontmatter issues",
@@ -610,9 +774,11 @@ def cmd_lint(args) -> int:
         "J": f"Long pages (over {max_lines} lines)",
         "K": "Likely duplicates (similar title, aliases, summary and atoms)",
         "V": "Stale verification (content changed since human review)",
+        "T": "Page types (missing or invalid type)",
+        "S": "Stale pages (past stale_after date)",
     }
     # In strict mode only G-data-errors, C, and H are hard errors that block commits.
-    # G-legacy (missing frontmatter), B, D, I, J, K, and V are soft warnings.
+    # G-legacy (missing frontmatter), B, D, I, J, K, V, T, and S are soft warnings.
     strict = getattr(args, "strict", False)
     limit = None if getattr(args, "all", False) else max(1, getattr(args, "limit", 20))
 
@@ -624,9 +790,9 @@ def cmd_lint(args) -> int:
         return 0
 
     n = 1
-    for check in "GBCDHIJKV":
+    for check in "GBCDHIJKVTS":
         items = issues[check]
-        soft_tag = "  [warning — not blocking]" if strict and check in ("B", "D", "I", "J", "K", "V") else ""
+        soft_tag = "  [warning — not blocking]" if strict and check in ("B", "D", "I", "J", "K", "V", "T", "S") else ""
 
         if check == "G":
             leg_count = len(legacy_pages)
@@ -1048,7 +1214,7 @@ def _q(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def convert_legacy(text: str) -> tuple[str | None, str]:
+def convert_legacy(text: str, slug: str = "") -> tuple[str | None, str]:
     """Return (new_text, info) or (None, reason). Only the title/metadata header changes:
     the bold lines and the '---' rule after them become frontmatter; the body is kept as is."""
     if text.startswith("---\n"):
@@ -1072,7 +1238,8 @@ def convert_legacy(text: str) -> tuple[str | None, str]:
     if missing:
         return None, f"header lacks {', '.join(missing)}"
     sources, provenance = legacy_sources(meta["Sources"])
-    fm = ["---", f"title: {_q(lines[t][2:].strip())}", f"summary: {_q(meta['Summary'])}"]
+    inferred_type = infer_page_type(slug, text) if slug else "Note"
+    fm = ["---", f"title: {_q(lines[t][2:].strip())}", f"type: {inferred_type}", f"summary: {_q(meta['Summary'])}"]
     fm += (["sources:"] + [f"  - {s}" for s in sources]) if sources else ["sources: []"]
     fm += [f"source_count: {len(sources)}"]
     fm += (["provenance:"] + [f"  - {_q(p)}" for p in provenance]) if provenance else []
@@ -1214,7 +1381,7 @@ def cmd_convert_legacy(args) -> int:
     for p in sorted(WIKI.glob("*.md")):
         if p.name in SKIP:
             continue
-        new, info = convert_legacy(p.read_text())
+        new, info = convert_legacy(p.read_text(), slug=p.stem)
         if new is None:
             if info != "already has frontmatter":
                 print(f"  skip {p.name}: {info}")
@@ -1229,6 +1396,51 @@ def cmd_convert_legacy(args) -> int:
     if done and not args.apply:
         print("Rerun with --apply to write.")
     return 1 if skipped else 0
+
+
+def cmd_set_type(args) -> int:
+    specified_type = getattr(args, "type", None)
+    if specified_type is not None:
+        canon_type = canonical_page_type(specified_type)
+        if not canon_type:
+            print(f"Invalid page type {specified_type!r}: choose from {', '.join(sorted(PAGE_TYPES))}", file=sys.stderr)
+            return 1
+    else:
+        canon_type = None
+
+    if getattr(args, "all", False):
+        pages = sorted(WIKI.glob("*.md"))
+        targets = [p for p in pages if p.name not in SKIP]
+    elif getattr(args, "pages", None):
+        targets = []
+        for pg in args.pages:
+            p = WIKI / f"{_page_slug(pg)}.md"
+            if not p.is_file():
+                print(f"No page '{p.stem}'.", file=sys.stderr)
+                return 1
+            targets.append(p)
+    else:
+        print("Specify page(s) or --all.", file=sys.stderr)
+        return 1
+
+    rc = 0
+    for path in targets:
+        text = path.read_text(encoding="utf-8")
+        fm, _ = parse_frontmatter(text)
+        existing_type = canonical_page_type(fm.get("type")) if isinstance(fm, dict) else None
+        target_type = canon_type or existing_type or infer_page_type(path.stem, text)
+        try:
+            new_text = set_page_type(text, target_type)
+        except ValueError as e:
+            print(f"{path.name}: {e}", file=sys.stderr)
+            rc = 1
+            continue
+        if new_text != text:
+            path.write_text(new_text, encoding="utf-8")
+            print(f"Set {path.name} type: {target_type}")
+        else:
+            print(f"Kept {path.name} type: {target_type}")
+    return rc
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -1297,6 +1509,11 @@ def main():
     conv_p = sub.add_parser("convert-legacy", help="Convert legacy pages to frontmatter (dry run unless --apply)")
     conv_p.add_argument("--apply", action="store_true", help="Write the converted pages")
 
+    type_p = sub.add_parser("set-type", help="Set or infer frontmatter type on wiki pages")
+    type_p.add_argument("pages", nargs="*", help="Page slug(s) or filename(s)")
+    type_p.add_argument("--type", "-t", default=None, help="Page type (Note, Runbook, Decision, Reference, Session, Todo). Inferred if omitted.")
+    type_p.add_argument("--all", action="store_true", help="Apply to all pages in wiki/")
+
     args = p.parse_args()
     if args.command == "build":
         sys.exit(cmd_build(args))
@@ -1306,7 +1523,8 @@ def main():
         sys.exit({"search": cmd_search, "links": cmd_links, "sections": cmd_sections,
                   "index-add": cmd_index_add, "set-atoms": cmd_set_atoms, "stamp": cmd_stamp,
                   "hash": cmd_hash, "verify": cmd_verify, "pending": cmd_pending,
-                  "convert-legacy": cmd_convert_legacy, "rotate-log": cmd_rotate_log}[args.command](args))
+                  "convert-legacy": cmd_convert_legacy, "set-type": cmd_set_type,
+                  "rotate-log": cmd_rotate_log}[args.command](args))
 
 
 if __name__ == "__main__":

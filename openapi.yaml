@@ -245,7 +245,7 @@ paths:
       - $ref: "#/components/parameters/LobeName"
     get:
       operationId: lintLobe
-      summary: Audit lobe wiki for frontmatter, broken links, orphans, index drift, and missing sources
+      summary: Audit lobe wiki for frontmatter, page types, staleness, broken links, orphans, index drift, and missing sources
       parameters:
         - name: strict
           in: query

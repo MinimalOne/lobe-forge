@@ -6,6 +6,7 @@ Run: python3 server/test_server.py
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import shutil
@@ -1421,6 +1422,69 @@ def test_part8_verification_channel_and_auth() -> None:
             srv.shutdown()
 
 
+def test_part9_page_types_and_lifecycle() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["LOBES_DIR"] = tmp
+        os.environ.pop("LOBE_API_TOKEN", None)
+        os.environ.pop("LOBE_HUMAN_TOKEN", None)
+        os.environ.pop("LOBE_OAUTH_ISSUER", None)
+
+        app.create_lobe("typelobe", "Type test lobe")
+
+        # 1. Page without type triggers lint T warning
+        app.write_page(
+            "typelobe",
+            "untyped-page",
+            "---\ntitle: Untyped\nsummary: Test summary.\nlast_updated: 2026-11-01\nsource_count: 0\nprovenance: notes\natoms:\n  - Atom fact\n---\n\n## Section\n\nContent.\n",
+        )
+        lint1 = app.call_mcp_tool("lobe_lint", {"lobe": "typelobe", "strict": True})
+        assert lint1["returncode"] == 0
+        assert "T. Page types (missing or invalid type)" in lint1["stdout"]
+        assert "untyped-page.md — missing frontmatter 'type'" in lint1["stdout"]
+
+        # 2. Backfill types with wikictl set-type --all
+        res_set = app.run_wiki_tool("typelobe", "set-type", "--all")
+        assert res_set["returncode"] == 0
+        read_typed = app.read_page("typelobe", "untyped-page")
+        assert "type: Note" in read_typed["content"]
+
+        # Lint T issue is now cleared
+        lint2 = app.call_mcp_tool("lobe_lint", {"lobe": "typelobe", "strict": True})
+        assert "T. Page types" not in lint2["stdout"]
+
+        # 3. Create dated session and runbook pages, infer their types
+        app.write_page(
+            "typelobe",
+            "2026-11-02-transcript",
+            "---\ntitle: Session Log\nsummary: Notes.\nlast_updated: 2026-11-02\nsource_count: 0\nprovenance: notes\natoms:\n  - Atom fact\n---\n\n# Log\n",
+        )
+        app.run_wiki_tool("typelobe", "set-type", "2026-11-02-transcript")
+        read_session = app.read_page("typelobe", "2026-11-02-transcript")
+        assert "type: Session" in read_session["content"]
+
+        # 4. Old Runbook page triggers lint S (stale) warning
+        old_date = (datetime.date.today() - datetime.timedelta(days=200)).isoformat()
+        app.write_page(
+            "typelobe",
+            "backup-runbook",
+            f"---\ntitle: Backup Runbook\ntype: Runbook\nsummary: Backup steps.\nlast_updated: {old_date}\nsource_count: 0\nprovenance: notes\natoms:\n  - Atom fact\n---\n\n# Runbook\n",
+        )
+        lint3 = app.call_mcp_tool("lobe_lint", {"lobe": "typelobe", "strict": True})
+        assert lint3["returncode"] == 0
+        assert "S. Stale pages (past stale_after date)" in lint3["stdout"]
+        assert "backup-runbook.md — expired on" in lint3["stdout"]
+
+        # 5. Overriding with future stale_after clears the staleness warning
+        app.write_page(
+            "typelobe",
+            "backup-runbook",
+            f"---\ntitle: Backup Runbook\ntype: Runbook\nstale_after: 2099-01-01\nsummary: Backup steps.\nlast_updated: {old_date}\nsource_count: 0\nprovenance: notes\natoms:\n  - Atom fact\n---\n\n# Runbook\n",
+            expected_sha=app.read_page("typelobe", "backup-runbook")["sha"],
+        )
+        lint4 = app.call_mcp_tool("lobe_lint", {"lobe": "typelobe", "strict": True})
+        assert "backup-runbook.md — expired on" not in lint4["stdout"]
+
+
 if __name__ == "__main__":
     test_part1_core_and_git_scenarios()
     print("OK: Part 1 core & Git E2E scenarios passed")
@@ -1438,3 +1502,5 @@ if __name__ == "__main__":
     print("OK: Part 7 server-owned trust fields passed")
     test_part8_verification_channel_and_auth()
     print("OK: Part 8 verification channel and auth passed")
+    test_part9_page_types_and_lifecycle()
+    print("OK: Part 9 page types and lifecycle passed")

@@ -20,6 +20,7 @@ Ingest a raw source into the **{{NAME}}** lobe on `lobe-server` via MCP. Purpose
 ```markdown
 ---
 title: Page Title
+type: Note
 summary: One sentence (15-40 words) saying what this page is.
 aliases:
   - Other Name

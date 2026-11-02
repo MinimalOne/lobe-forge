@@ -1004,6 +1004,10 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
     raise ValueError(f"Unknown MCP tool: {name!r}")
 
 
+# Oldest first. Streamable HTTP needs 2025-03-26+; 2025-06-18 drops JSON-RPC batching, which we already reject.
+MCP_PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18")
+
+
 def handle_mcp_message(msg: dict[str, Any]) -> dict[str, Any] | None:
     """Process a single JSON-RPC 2.0 MCP message and return a response dict (or None for notifications)."""
     if not isinstance(msg, dict):  # e.g. a JSON-RPC batch: one bad message must not crash the stdio loop or 500 over HTTP
@@ -1016,11 +1020,13 @@ def handle_mcp_message(msg: dict[str, Any]) -> dict[str, Any] | None:
         return None  # JSON-RPC notification (e.g. notifications/initialized)
 
     if method == "initialize":
+        # answer with the client's version when we support it, else our newest (MCP version negotiation)
+        requested = params.get("protocolVersion") if isinstance(params, dict) else None
         return {
             "jsonrpc": "2.0",
             "id": msg_id,
             "result": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": requested if requested in MCP_PROTOCOL_VERSIONS else MCP_PROTOCOL_VERSIONS[-1],
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "lobe-server", "version": server_version()},
             },

@@ -21,7 +21,7 @@
 
 ## MCP tools
 
-lobe-server implements MCP protocol version `2024-11-05` over Streamable HTTP (`POST /mcp`) and stdio (`--stdio`).
+lobe-server speaks MCP over Streamable HTTP (`POST /mcp`, plain JSON responses, no sessions) and stdio (`--stdio`). It supports protocol versions `2024-11-05`, `2025-03-26` and `2025-06-18`: `initialize` answers with the version the client asks for when it is one of these, and with `2025-06-18` otherwise.
 
 | Tool | Required | Optional | Description |
 | :--- | :--- | :--- | :--- |

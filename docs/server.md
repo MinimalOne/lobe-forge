@@ -114,6 +114,19 @@ lobe-server validates each token by calling the provider's introspection endpoin
 | The connector connects, but every tool call fails with 401 | lobe-server cannot reach the issuer URL. If the issuer's name resolves to your public IP and your router has no hairpin NAT, add `extra_hosts: ["auth.example.com:host-gateway"]` to the lobe-server service so it reaches your reverse proxy directly. |
 | You must sign in again every hour | The client is missing the `offline_access` scope, so Claude gets no refresh token. |
 
+## 5. Turn on human page verification (optional)
+
+A page counts as reviewed only when a person verifies it; an agent's token gets `403`. Give the person their own credential, in the environment file:
+
+```dotenv
+# simplest: a separate token you keep to yourself, never in an AI tool's config
+LOBE_HUMAN_TOKEN=<long random token>
+# or, with OAuth: a second client for people, or the lobe:verify scope on their tokens
+LOBE_HUMAN_CLIENT_ID=<client id>
+```
+
+Then open `https://lobes.example.com/api/lobes/<lobe>/pages/<slug>/verify?token=<human token>` in a browser and click **Verify this page**. `wikictl lint` reports a verified page as "changed since review" (check V) once its content changes.
+
 ## Upgrade
 
 ```bash

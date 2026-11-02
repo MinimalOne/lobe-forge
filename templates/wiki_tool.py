@@ -171,8 +171,8 @@ TRUST_KEYS = ("generated", "verified")
 ACTOR_RE = re.compile(r"^[\w.@:-]{1,64}$")
 
 
-def _split_trust(fm_lines: list[str]) -> tuple[list[str], list[str]]:
-    """Split frontmatter lines into (other lines, `verified:` block lines); `generated:` is dropped.
+def _split_trust(fm_lines: list[str], strip: tuple[str, ...] = TRUST_KEYS) -> tuple[list[str], list[str]]:
+    """Split frontmatter lines into (other lines, `verified:` block lines); other `strip` keys are dropped.
     Keys are matched the way _parse_fm_block reads them (`verified :`, `'verified':` included)."""
     kept: list[str] = []
     verified: list[str] = []
@@ -183,31 +183,10 @@ def _split_trust(fm_lines: list[str]) -> tuple[list[str], list[str]]:
                 verified.append(line)
             continue
         key = line.split(":", 1)[0].strip().strip("'\"") if ":" in line and not line.startswith((" ", "\t", "#")) else None
-        current = key if key in TRUST_KEYS else None
+        current = key if key in strip else None
         if current == "verified":
             verified.append(line)
         elif not current:
-            kept.append(line)
-    return kept, verified
-
-
-def _split_verified(fm_lines: list[str]) -> tuple[list[str], list[str]]:
-    """Split frontmatter lines into (all other lines including generated, `verified:` block lines)."""
-    kept: list[str] = []
-    verified: list[str] = []
-    current = None
-    for line in fm_lines:
-        if current and line.startswith((" ", "\t")):
-            if current == "verified":
-                verified.append(line)
-            else:
-                kept.append(line)
-            continue
-        key = line.split(":", 1)[0].strip().strip("'\"") if ":" in line and not line.startswith((" ", "\t", "#")) else None
-        current = key if key == "verified" else None
-        if current == "verified":
-            verified.append(line)
-        else:
             kept.append(line)
     return kept, verified
 
@@ -263,6 +242,12 @@ def strip_and_splice_trust_fields(
     return lines[0] + "".join(kept + disk_verified) + gen_line + "".join(lines[start - 1:])
 
 
+def human_actor(name: str | None) -> str:
+    """Reviewer name for `verified.by`: `jijin` -> `human:jijin`; empty -> `human`."""
+    name = (name or "").strip() or "human"
+    return name if name == "human" or name.startswith("human:") else f"human:{name}"
+
+
 def page_hash(text: str) -> str:
     """Canonical 16-hex content hash of a page, excluding trust fields (generated & verified),
     with normalized line endings (\\r\\n -> \\n) and exactly one trailing newline."""
@@ -280,7 +265,7 @@ def set_verified_field(text: str, by: str, at: str, sha: str) -> str:
     start = _frontmatter_end(lines)
     if not start:
         return "---\n" + verified_line + "---\n\n" + text
-    kept = _split_verified(lines[1:start - 1])[0]
+    kept = _split_trust(lines[1:start - 1], strip=("verified",))[0]
     return lines[0] + "".join(kept) + verified_line + "".join(lines[start - 1:])
 
 
@@ -1178,11 +1163,7 @@ def cmd_hash(args) -> int:
 
 
 def cmd_verify(args) -> int:
-    actor = getattr(args, "by", "human") or "human"
-    if not ACTOR_RE.match(actor):
-        print(f"Invalid actor {actor!r}: use 1-64 letters, digits or . _ @ : -", file=sys.stderr)
-        return 1
-    by = actor if actor.startswith("human:") else f"human:{actor}"
+    by = human_actor(args.by)
     at_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     rc = 0

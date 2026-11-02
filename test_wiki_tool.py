@@ -1,4 +1,6 @@
 """Tests for wiki_tool code masking, fence parsing, and wiki_links_in."""
+import contextlib
+import io
 import sys
 from pathlib import Path
 
@@ -14,6 +16,7 @@ from wiki_tool import (
     cmd_stamp,
     cmd_verify,
     code_line_indices,
+    human_actor,
     mask_code,
     page_hash,
     parse_frontmatter,
@@ -352,12 +355,20 @@ def test_set_verified_field():
     assert 'generated: { by: "agent-1"' in updated
 
     # Rejects invalid actor
-    import pytest
-    with pytest.raises(ValueError, match="Invalid actor"):
+    try:
         set_verified_field(base, by="bad actor with spaces", at="now", sha="123")
+        raise AssertionError("invalid actor accepted")
+    except ValueError as e:
+        assert "Invalid actor" in str(e)
 
 
-def test_cmd_hash_and_cmd_verify(capsys):
+def test_human_actor():
+    assert human_actor("jijin") == "human:jijin"
+    assert human_actor("human:jijin") == "human:jijin"
+    assert human_actor(None) == human_actor("") == human_actor("human") == "human"
+
+
+def test_cmd_hash_and_cmd_verify():
     import argparse
     import tempfile
     import wiki_tool
@@ -372,11 +383,12 @@ def test_cmd_hash_and_cmd_verify(capsys):
         wiki_tool.WIKI = wiki_dir
         try:
             # Test cmd_hash
-            rc = cmd_hash(argparse.Namespace(page="test-page"))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = cmd_hash(argparse.Namespace(page="test-page"))
             assert rc == 0
-            captured = capsys.readouterr()
             expected_h = page_hash(page_file.read_text())
-            assert captured.out.strip() == expected_h
+            assert out.getvalue().strip() == expected_h
 
             # Test cmd_hash missing
             assert cmd_hash(argparse.Namespace(page="missing")) == 1
@@ -388,13 +400,17 @@ def test_cmd_hash_and_cmd_verify(capsys):
             assert f'verified: {{ by: "human:jijin", at:' in content
             assert f'sha: "{expected_h}"' in content
 
+            # The default reviewer is plain `human`, as on the server
+            assert cmd_verify(argparse.Namespace(pages=["test-page"], by="human")) == 0
+            assert 'verified: { by: "human", at:' in page_file.read_text()
+
             # Test cmd_verify invalid actor
             assert cmd_verify(argparse.Namespace(pages=["test-page"], by="bad actor")) == 1
         finally:
             wiki_tool.WIKI = saved
 
 
-def test_cmd_lint_verified_rule_v(capsys):
+def test_cmd_lint_verified_rule_v():
     import argparse
     import tempfile
     import wiki_tool
@@ -417,21 +433,23 @@ def test_cmd_lint_verified_rule_v(capsys):
         wiki_tool.INDEX = index_file
         try:
             # Unmodified page: Rule V produces no warnings
-            rc = cmd_lint(argparse.Namespace(strict=True, limit=20, all=False))
-            captured = capsys.readouterr()
-            assert "Stale verification" not in captured.out
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                cmd_lint(argparse.Namespace(strict=True, limit=20, all=False))
+            assert "Stale verification" not in out.getvalue()
 
             # Modify page content without updating verification
             tampered = ver_content + "\nExtra unstamped modifications.\n"
             page_file.write_text(tampered)
 
             # Strict mode: Rule V is reported as a soft warning, not blocking (rc == 0)
-            rc = cmd_lint(argparse.Namespace(strict=True, limit=20, all=False))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = cmd_lint(argparse.Namespace(strict=True, limit=20, all=False))
             assert rc == 0
-            captured = capsys.readouterr()
-            assert "Stale verification" in captured.out
-            assert "content changed since review by human:tester on 2026-11-01T10:00:00Z" in captured.out
-            assert f"sha {h} !=" in captured.out
+            assert "Stale verification" in out.getvalue()
+            assert "content changed since review by human:tester on 2026-11-01T10:00:00Z" in out.getvalue()
+            assert f"sha {h} !=" in out.getvalue()
         finally:
             wiki_tool.WIKI = saved_wiki
             wiki_tool.INDEX = saved_index
@@ -450,4 +468,9 @@ if __name__ == "__main__":
     test_strip_trust_fields()
     test_parser_empty_key_and_flat_flow()
     test_cmd_stamp()
+    test_page_hash()
+    test_set_verified_field()
+    test_human_actor()
+    test_cmd_hash_and_cmd_verify()
+    test_cmd_lint_verified_rule_v()
     print("All wiki_tool masker tests passed!")

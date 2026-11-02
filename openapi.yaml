@@ -458,6 +458,17 @@ paths:
     get:
       operationId: getVerifyWikiPage
       summary: Get verification status or HTML verification confirmation page
+      description: |
+        Send `Accept: text/html` for a page with a one-click verify form. A browser cannot send a
+        Bearer header, so this route alone also accepts the token as `?token=`; the page then posts
+        it back in the form body, never the URL.
+      parameters:
+        - name: token
+          in: query
+          required: false
+          description: Bearer token for browsers (this route only)
+          schema:
+            type: string
       responses:
         "200":
           description: Verification status or HTML page
@@ -475,13 +486,25 @@ paths:
 
     post:
       operationId: verifyWikiPage
-      summary: Stamp human verification on a wiki page pinned by expected_sha
+      summary: Stamp human verification on a wiki page pinned by expected_hash
+      description: |
+        Requires a human credential (`LOBE_HUMAN_TOKEN`, an OAuth token from `LOBE_HUMAN_CLIENT_ID`,
+        or one with `LOBE_HUMAN_SCOPE`); the agent token gets 403. There is no MCP equivalent.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/VerifyPageRequest"
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/VerifyPageRequest"
+                - type: object
+                  properties:
+                    token:
+                      type: string
+                      description: Bearer token, when the browser form cannot send a header
       responses:
         "200":
           description: Page verified and committed locally
@@ -906,14 +929,14 @@ components:
 
     VerifyPageRequest:
       type: object
-      required: [expected_sha]
+      required: [expected_hash]
       properties:
-        expected_sha:
+        expected_hash:
           type: string
-          description: Canonical content hash (excluding trust fields) expected for the page
+          description: '`hash` from GET .../verify (page content without trust fields); not the `sha` from a page read'
         by:
           type: string
-          description: Optional human reviewer identity (e.g. 'jijin' or 'human:jijin')
+          description: Reviewer name (e.g. 'jijin'), used only with a shared credential; an OAuth token's own identity wins
 
     VerifyPageResponse:
       allOf:
@@ -941,15 +964,15 @@ components:
 
     VerifyStatusResponse:
       type: object
-      required: [lobe, slug, sha, is_verified, is_stale]
+      required: [lobe, slug, hash, is_verified, is_stale]
       properties:
         lobe:
           type: string
         slug:
           type: string
-        sha:
+        hash:
           type: string
-          description: Current canonical page content hash
+          description: Current page_hash (content without trust fields); pass as `expected_hash` to verify
         verified:
           type: object
           nullable: true

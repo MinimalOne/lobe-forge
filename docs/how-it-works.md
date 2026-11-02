@@ -15,7 +15,49 @@ LOBE.md         Page format and rules the assistant follows
 skills/         <name>-add-raw, <name>-ingest, <name>-ask, <name>-lint
 ```
 
-Pages are plain Markdown with YAML frontmatter (title, summary, aliases, atoms, sources, last updated) and `[[wiki-links]]`. Atoms are one-line facts, commands, fixes, and decisions, so search can answer from them directly. Search ranks a match in a page's name, title, aliases, atoms, or summary above a match in the body text, and slightly prefers recently updated pages. Every change is a Git commit, so you can review, revert, or push it like any other repository.
+Pages are plain Markdown with YAML frontmatter (title, type, summary, aliases, atoms, sources, last updated) and `[[wiki-links]]`. Atoms are one-line facts, commands, fixes, and decisions, so search can answer from them directly. Search ranks a match in a page's name, title, aliases, atoms, or summary above a match in the body text, and slightly prefers recently updated pages. Every change is a Git commit, so you can review, revert, or push it like any other repository.
+
+## Trust: who wrote a page, and did a person check it
+
+An AI wrote most of your wiki, so every page answers two questions in its frontmatter:
+
+```yaml
+generated: { by: "mcp-client", at: "2026-11-02T20:00:42Z" }                # the last write
+verified:  { by: "human:alice", at: "2026-11-02T20:47:29Z", sha: "441f90d8d876da7c" }  # the last human review
+```
+
+- **lobe-server owns both fields.** It drops them from anything an agent writes, stamps `generated` itself on every change, and keeps `verified` from the page on disk. An agent cannot mark its own work as reviewed.
+- **Only a person can verify.** `POST /api/lobes/<lobe>/pages/<slug>/verify` accepts only a human credential (`LOBE_HUMAN_TOKEN`, or an OAuth client or scope you mark as human); the agent token gets `403`, and there is no MCP tool for it. The request names the content hash you reviewed, so a page that changed in the meantime is refused with `409`. See [server.md](server.md#5-turn-on-human-page-verification-optional).
+- **Reviews expire on change.** `verified.sha` is a hash of the page without the trust fields. Any later edit, by an agent, by you, or pulled in from Git, makes lint report the page as "changed since review", and the old review stays on the page as history.
+- **Local lobes** stamp the same fields with `wikictl stamp` and `wikictl verify`. There, anyone with a shell can run them, so a local `verified` is an honest label, not a guarantee.
+
+## Page types and staleness
+
+Each page has a `type`, and the type decides how long the page stays fresh:
+
+| Type | Goes stale after | For |
+| :--- | :--- | :--- |
+| `Note` | 90 days | Default; pages with no type age like notes |
+| `Todo` | 90 days | Task lists |
+| `Runbook` | 180 days | Step-by-step procedures |
+| `Reference` | 365 days | Architecture, concepts, specs |
+| `Decision` | never | Decisions and RFCs |
+| `Session` | never | Dated records of one session or incident |
+
+The clock runs from the latest of `last_updated`, the last edit, and the last human review, so touching or reviewing a page restarts it. `stale_after: YYYY-MM-DD` overrides the default, and `status: archived`, `deprecated` or `superseded` stops a page from ever going stale. `wikictl set-type --all` fills in types for existing pages.
+
+## Lint: keeping the wiki healthy
+
+`wikictl lint` (or `lobe_lint`) checks every page. Broken `[[links]]`, frontmatter errors and missing source files are errors that block `--strict`; everything else is a warning:
+
+- orphan pages, index drift, missing atoms, long pages, likely duplicates;
+- missing or invalid page types (T), pages past their staleness date (S), and pages changed since their last human review (V).
+
+Links and headings inside code blocks are ignored, so a `[[...]]` or `## comment` in a code sample is never mistaken for a real link or section.
+
+## Export: Open Knowledge Format
+
+`wikictl export-okf <dir>` (or `GET /api/lobes/<lobe>/export-okf`) writes the wiki as an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format) v0.2 bundle: `[[links]]` become ordinary Markdown links, `summary` becomes `description`, dates become full ISO 8601 timestamps, and the logs stay out. Other tools can read your knowledge without lobe-forge.
 
 ## Local and remote lobes
 

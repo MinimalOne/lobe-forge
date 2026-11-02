@@ -175,6 +175,13 @@ TRUST_KEYS = ("generated", "verified")
 ACTOR_RE = re.compile(r"^[\w.@:-]{1,64}$")
 
 
+def _fm_key(line: str) -> str | None:
+    """Top-level key of a frontmatter line, read the way _parse_fm_block reads it (`key :`, `'key':`)."""
+    if ":" not in line or line.startswith((" ", "\t", "#")):
+        return None
+    return line.split(":", 1)[0].strip().strip("'\"")
+
+
 def _split_trust(fm_lines: list[str], strip: tuple[str, ...] = TRUST_KEYS) -> tuple[list[str], list[str]]:
     """Split frontmatter lines into (other lines, `verified:` block lines); other `strip` keys are dropped.
     Keys are matched the way _parse_fm_block reads them (`verified :`, `'verified':` included)."""
@@ -186,7 +193,7 @@ def _split_trust(fm_lines: list[str], strip: tuple[str, ...] = TRUST_KEYS) -> tu
             if current == "verified":
                 verified.append(line)
             continue
-        key = line.split(":", 1)[0].strip().strip("'\"") if ":" in line and not line.startswith((" ", "\t", "#")) else None
+        key = _fm_key(line)
         current = key if key in strip else None
         if current == "verified":
             verified.append(line)
@@ -287,16 +294,12 @@ TYPE_DEFAULT_STALE_DAYS: dict[str, int | None] = {
 SESSION_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(-.*)?$")
 
 
+_TYPE_BY_LOWER = {t.lower(): t for t in PAGE_TYPES}
+
+
 def canonical_page_type(val: str | None) -> str | None:
-    """Normalize page type to canonical casing (e.g. 'runbook' -> 'Runbook', 'todo' -> 'Todo').
-    Returns None if val is empty or not in PAGE_TYPES."""
-    if not val or not isinstance(val, str):
-        return None
-    s = val.strip()
-    for pt in PAGE_TYPES:
-        if pt.lower() == s.lower():
-            return pt
-    return None
+    """Normalize page type to canonical casing (e.g. 'runbook' -> 'Runbook'); None if not a page type."""
+    return _TYPE_BY_LOWER.get(val.strip().lower()) if isinstance(val, str) else None
 
 
 def infer_page_type(slug: str, text: str = "") -> str:
@@ -332,6 +335,14 @@ def infer_page_type(slug: str, text: str = "") -> str:
     return "Note"
 
 
+def _as_date(val) -> datetime.date | None:
+    """`2026-11-02` or `2026-11-02T10:00:00Z` -> date; anything else -> None."""
+    try:
+        return datetime.date.fromisoformat(str(val).strip()[:10])
+    except ValueError:
+        return None
+
+
 def effective_stale_after(entry: dict) -> tuple[datetime.date | None, str]:
     """Calculate the effective stale_after date and reason for a page entry.
     Returns (stale_date, reason) or (None, reason) if it never goes stale."""
@@ -339,37 +350,25 @@ def effective_stale_after(entry: dict) -> tuple[datetime.date | None, str]:
     if status in ("archived", "deprecated", "superseded"):
         return None, f"status is {status}"
 
-    explicit = entry.get("stale_after")
+    explicit = _as_date(entry.get("stale_after"))
     if explicit:
-        try:
-            d_str = str(explicit).strip().split("T")[0]
-            return datetime.date.fromisoformat(d_str), f"explicit stale_after: {d_str}"
-        except (ValueError, TypeError):
-            pass
+        return explicit, f"explicit stale_after: {explicit.isoformat()}"
 
-    pt = canonical_page_type(entry.get("type"))
-    if not pt:
-        return None, "no page type"
-
-    days = TYPE_DEFAULT_STALE_DAYS.get(pt)
+    # untyped pages age like Notes (lint T asks for the type)
+    pt = canonical_page_type(entry.get("type")) or "Note"
+    days = TYPE_DEFAULT_STALE_DAYS[pt]
     if days is None:
         return None, f"{pt} pages do not expire"
 
-    base_str = None
-    if entry.get("last_updated"):
-        base_str = str(entry["last_updated"]).strip().split("T")[0]
-    elif isinstance(entry.get("generated"), dict) and entry["generated"].get("at"):
-        base_str = str(entry["generated"]["at"]).strip().split("T")[0]
-
-    if not base_str:
-        return None, "no base date (last_updated or generated.at)"
-
-    try:
-        base_date = datetime.date.fromisoformat(base_str)
-        stale_date = base_date + datetime.timedelta(days=days)
-        return stale_date, f"{pt} default ({days} days after {base_str})"
-    except (ValueError, TypeError):
-        return None, f"invalid base date: {base_str}"
+    # the clock restarts on any edit (server-stamped generated.at) or human review (verified.at),
+    # not only when the writer remembers to bump last_updated
+    stamps = [entry.get("last_updated")]
+    stamps += [f.get("at") for f in (entry.get("generated"), entry.get("verified")) if isinstance(f, dict)]
+    dates = [d for d in map(_as_date, stamps) if d]
+    if not dates:
+        return None, "no base date (last_updated, generated.at or verified.at)"
+    base = max(dates)
+    return base + datetime.timedelta(days=days), f"{pt} default ({days} days after {base.isoformat()})"
 
 
 def set_page_type(text: str, page_type: str) -> str:
@@ -381,13 +380,14 @@ def set_page_type(text: str, page_type: str) -> str:
     start = _frontmatter_end(lines)
     type_line = f"type: {canon}\n"
     if not start:
-        return "---\n" + type_line + "---\n\n" + text
+        # a type-only frontmatter would hide the legacy header from convert-legacy for good
+        raise ValueError("no frontmatter: run convert-legacy first (it sets the type)")
 
     fm_lines = lines[1:start - 1]
     new_fm = []
     type_found = False
     for line in fm_lines:
-        if not line.startswith((" ", "\t", "#")) and line.split(":", 1)[0].strip().strip("'\"") == "type":
+        if _fm_key(line) == "type":
             new_fm.append(type_line)
             type_found = True
         else:
@@ -396,7 +396,7 @@ def set_page_type(text: str, page_type: str) -> str:
     if not type_found:
         insert_idx = 0
         for i, line in enumerate(new_fm):
-            if not line.startswith((" ", "\t", "#")) and line.split(":", 1)[0].strip().strip("'\"") in ("title", "summary"):
+            if _fm_key(line) in ("title", "summary"):
                 insert_idx = i + 1
         new_fm.insert(insert_idx, type_line)
 
@@ -757,6 +757,8 @@ def cmd_lint(args) -> int:
     for name, e in entries.items():
         if not e["has_frontmatter"]:
             continue
+        if e.get("stale_after") and not _as_date(e["stale_after"]):
+            issues["S"].append((name, f"invalid stale_after {e['stale_after']!r} (use YYYY-MM-DD); using the type default"))
         stale_date, reason = effective_stale_after(e)
         if stale_date and today >= stale_date:
             days_ago = (today - stale_date).days

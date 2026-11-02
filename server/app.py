@@ -48,15 +48,11 @@ if str(ROOT / "templates") not in sys.path:
     sys.path.insert(0, str(ROOT / "templates"))
 import forge  # noqa: E402
 from wiki_tool import (  # noqa: E402
-    PAGE_TYPES,
     body_start,
-    canonical_page_type,
     code_line_indices,
     human_actor,
-    infer_page_type,
     page_hash,
     parse_frontmatter,
-    set_page_type,
     set_verified_field,
     strip_and_splice_trust_fields,
     strip_trust_fields,

@@ -542,6 +542,20 @@ def test_effective_stale_after():
     assert effective_stale_after({"type": "Runbook", "status": "archived", "last_updated": "2020-01-01"})[0] is None
     assert effective_stale_after({"type": "Runbook", "status": "deprecated", "last_updated": "2020-01-01"})[0] is None
 
+    # The clock runs from the latest of last_updated, generated.at (any edit) and verified.at (human review)
+    old = {"type": "Note", "last_updated": "2025-01-01"}
+    assert effective_stale_after({**old, "generated": {"at": "2026-11-01T10:00:00Z"}})[0] == datetime.date(2027, 1, 30)
+    assert effective_stale_after({**old, "verified": {"at": "2026-11-01T10:00:00Z", "sha": "x"}})[0] == datetime.date(2027, 1, 30)
+    assert effective_stale_after({**old, "generated": {"at": "2024-01-01T00:00:00Z"}})[0] == datetime.date(2025, 4, 1)
+
+    # Untyped and invalid-typed pages age like Notes
+    assert effective_stale_after({"last_updated": "2026-01-01"})[0] == datetime.date(2026, 4, 1)
+    assert effective_stale_after({"type": "howto", "last_updated": "2026-01-01"})[0] == datetime.date(2026, 4, 1)
+
+    # An unparseable stale_after falls back to the type default (lint S reports it)
+    assert effective_stale_after({"type": "Runbook", "stale_after": "next-year", "last_updated": "2026-01-01"})[0] == datetime.date(2026, 6, 30)
+    assert effective_stale_after({"type": "Note"}) == (None, "no base date (last_updated, generated.at or verified.at)")
+
 
 def test_set_page_type():
     doc = "---\ntitle: My Page\nsummary: Summary here.\n---\n\n# Body\n"
@@ -554,10 +568,15 @@ def test_set_page_type():
     assert "type: Decision\n" in replaced
     assert "type: Runbook" not in replaced
 
-    # Document without frontmatter
-    no_fm = "# Title\n\nBody content.\n"
-    with_fm = set_page_type(no_fm, "session")
-    assert with_fm.startswith("---\ntype: Session\n---\n\n# Title")
+    # A page without frontmatter (legacy header) is refused, not given a type-only frontmatter
+    try:
+        set_page_type("# Title\n\n**Summary:** s\n", "session")
+        raise AssertionError("expected ValueError")
+    except ValueError as e:
+        assert "convert-legacy" in str(e)
+
+    # Spaced and quoted keys are found, not duplicated
+    assert set_page_type("---\ntitle: T\n'type' : note\n---\nb\n", "Todo").count("type") == 1
 
     # Rejects invalid type
     try:
@@ -602,6 +621,16 @@ def test_cmd_set_type():
             assert rc == 0
             assert "type: Session" in p1.read_text()
             assert "type: Runbook" in p2.read_text()
+
+            # --all leaves a legacy page untouched and reports it
+            legacy = "# Old\n\n**Summary:** s\n**Sources:** raw/a.md\n**Last updated:** 2025-01-01\n\n---\n\nbody\n"
+            p3 = wiki_dir / "old.md"
+            p3.write_text(legacy)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = cmd_set_type(argparse.Namespace(pages=[], type=None, all=True))
+            assert rc == 1 and "old.md: no frontmatter: run convert-legacy first" in err.getvalue(), err.getvalue()
+            assert p3.read_text() == legacy
         finally:
             wiki_tool.WIKI = saved
 
@@ -629,7 +658,12 @@ def test_cmd_lint_type_and_staleness():
         wiki_dir = Path(tmp) / "wiki"
         wiki_dir.mkdir()
         index_file = wiki_dir / "index.md"
-        index_file.write_text("# Index\n\n- [[page-no-type]] — test\n- [[page-stale]] — test\n")
+        index_file.write_text("# Index\n\n- [[page-no-type]] — test\n- [[page-stale]] — test\n- [[page-bad-date]] — test\n- [[page-old-untyped]] — test\n")
+        long_ago = (datetime.date.today() - datetime.timedelta(days=400)).isoformat()
+        (wiki_dir / "page-bad-date.md").write_text(
+            "---\ntitle: Bad\ntype: Decision\nstale_after: someday\nsummary: Test.\nlast_updated: 2026-11-01\nsource_count: 0\nprovenance: notes\natoms:\n  - Atom\n---\n\n# Bad\n")
+        (wiki_dir / "page-old-untyped.md").write_text(
+            f"---\ntitle: Old\nsummary: Test.\nlast_updated: {long_ago}\nsource_count: 0\nprovenance: notes\natoms:\n  - Atom\n---\n\n# Old\n")
 
         # Page missing type
         p1 = wiki_dir / "page-no-type.md"
@@ -655,6 +689,8 @@ def test_cmd_lint_type_and_staleness():
             assert "page-no-type.md — missing frontmatter 'type'" in val
             assert "S. Stale pages (past stale_after date)" in val
             assert "page-stale.md — expired on" in val
+            assert "page-bad-date.md — invalid stale_after 'someday'" in val, val
+            assert "page-old-untyped.md — expired on" in val and "Note default" in val, val
         finally:
             wiki_tool.WIKI = saved_wiki
             wiki_tool.INDEX = saved_index

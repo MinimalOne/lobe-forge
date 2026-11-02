@@ -1442,47 +1442,35 @@ def test_part9_page_types_and_lifecycle() -> None:
         assert "T. Page types (missing or invalid type)" in lint1["stdout"]
         assert "untyped-page.md — missing frontmatter 'type'" in lint1["stdout"]
 
-        # 2. Backfill types with wikictl set-type --all
-        res_set = app.run_wiki_tool("typelobe", "set-type", "--all")
-        assert res_set["returncode"] == 0
-        read_typed = app.read_page("typelobe", "untyped-page")
-        assert "type: Note" in read_typed["content"]
-
-        # Lint T issue is now cleared
+        # 2. An agent adds the type by rewriting the page (no server-side set-type)
+        typed = app.read_page("typelobe", "untyped-page")
+        app.write_page("typelobe", "untyped-page", typed["content"].replace("title: Untyped\n", "title: Untyped\ntype: Note\n"),
+                       expected_sha=typed["sha"])
         lint2 = app.call_mcp_tool("lobe_lint", {"lobe": "typelobe", "strict": True})
-        assert "T. Page types" not in lint2["stdout"]
+        assert "T. Page types" not in lint2["stdout"], lint2["stdout"]
 
-        # 3. Create dated session and runbook pages, infer their types
-        app.write_page(
-            "typelobe",
-            "2026-11-02-transcript",
-            "---\ntitle: Session Log\nsummary: Notes.\nlast_updated: 2026-11-02\nsource_count: 0\nprovenance: notes\natoms:\n  - Atom fact\n---\n\n# Log\n",
-        )
-        app.run_wiki_tool("typelobe", "set-type", "2026-11-02-transcript")
-        read_session = app.read_page("typelobe", "2026-11-02-transcript")
-        assert "type: Session" in read_session["content"]
-
-        # 4. Old Runbook page triggers lint S (stale) warning
+        # 3. A page written today is fresh even with an old last_updated: the edit restarts the clock
         old_date = (datetime.date.today() - datetime.timedelta(days=200)).isoformat()
-        app.write_page(
-            "typelobe",
-            "backup-runbook",
-            f"---\ntitle: Backup Runbook\ntype: Runbook\nsummary: Backup steps.\nlast_updated: {old_date}\nsource_count: 0\nprovenance: notes\natoms:\n  - Atom fact\n---\n\n# Runbook\n",
-        )
+        page = f"---\ntitle: Backup Runbook\ntype: Runbook\nsummary: Backup steps.\nlast_updated: {old_date}\nsource_count: 0\nprovenance: notes\natoms:\n  - Atom fact\n---\n\n# Runbook\n"
+        app.write_page("typelobe", "backup-runbook", page)
         lint3 = app.call_mcp_tool("lobe_lint", {"lobe": "typelobe", "strict": True})
-        assert lint3["returncode"] == 0
-        assert "S. Stale pages (past stale_after date)" in lint3["stdout"]
-        assert "backup-runbook.md — expired on" in lint3["stdout"]
+        assert "backup-runbook.md — expired on" not in lint3["stdout"], lint3["stdout"]
 
-        # 5. Overriding with future stale_after clears the staleness warning
-        app.write_page(
-            "typelobe",
-            "backup-runbook",
-            f"---\ntitle: Backup Runbook\ntype: Runbook\nstale_after: 2099-01-01\nsummary: Backup steps.\nlast_updated: {old_date}\nsource_count: 0\nprovenance: notes\natoms:\n  - Atom fact\n---\n\n# Runbook\n",
-            expected_sha=app.read_page("typelobe", "backup-runbook")["sha"],
-        )
+        # 4. A past stale_after expires it; lint S is a warning, not a failure
+        app.write_page("typelobe", "backup-runbook", page.replace("type: Runbook\n", "type: Runbook\nstale_after: 2020-01-01\n"),
+                       expected_sha=app.read_page("typelobe", "backup-runbook")["sha"])
         lint4 = app.call_mcp_tool("lobe_lint", {"lobe": "typelobe", "strict": True})
-        assert "backup-runbook.md — expired on" not in lint4["stdout"]
+        assert lint4["returncode"] == 0
+        assert "S. Stale pages (past stale_after date)" in lint4["stdout"]
+        assert "backup-runbook.md — expired on 2020-01-01" in lint4["stdout"], lint4["stdout"]
+
+        # 5. A future stale_after clears it, and no lint step left the lobe repo dirty
+        app.write_page("typelobe", "backup-runbook", page.replace("type: Runbook\n", "type: Runbook\nstale_after: 2099-01-01\n"),
+                       expected_sha=app.read_page("typelobe", "backup-runbook")["sha"])
+        lint5 = app.call_mcp_tool("lobe_lint", {"lobe": "typelobe", "strict": True})
+        assert "backup-runbook.md — expired on" not in lint5["stdout"]
+        dirty = app.git(app.l_paths("typelobe")["REPO"], "status", "--porcelain", "--", "wiki")
+        assert dirty.stdout.strip() == "", dirty.stdout
 
 
 if __name__ == "__main__":

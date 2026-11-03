@@ -626,7 +626,7 @@ def parse_page(path: Path, text: str | None = None) -> dict:
         if isinstance(provenance, str):
             provenance = [provenance]
         try:
-            sc = int(fm.get("source_count", -1))
+            sc = int(fm.get("source_count", len(sources)))  # missing: nothing to disagree with
         except (TypeError, ValueError):
             sc = -1
         aliases = fm.get("aliases", [])

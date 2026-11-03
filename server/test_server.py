@@ -1094,6 +1094,20 @@ Old note.
         resp = app.handle_mcp_message({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": [1]})
         assert resp["id"] == 9 and resp["result"]["isError"] is True, resp
 
+        # A write that fails midway (here: text that cannot be encoded) leaves the old page whole
+        before = (wiki / "k8s-1.29-upgrade.md").read_text()
+        try:
+            app.write_page("edits", "k8s-1.29-upgrade", "broken \ud800 text\n")
+            raise AssertionError("unencodable content accepted")
+        except UnicodeEncodeError:
+            pass
+        assert (wiki / "k8s-1.29-upgrade.md").read_text() == before
+        assert not list(wiki.glob("*.tmp")), list(wiki.glob("*.tmp"))
+
+        # lobe_search honours limit (the ask and ingest skills pass 5)
+        res = app.call_mcp_tool("lobe_search", {"lobe": "edits", "terms": ["."], "limit": 1})
+        assert res["returncode"] == 0 and "\n1 of " in res["stdout"], res
+
         # A search regex that backtracks without end is killed instead of pinning a CPU
         app.write_page("edits", "redos", "a" * 40 + "!\n")
         app.WIKI_TOOL_TIMEOUT = 1

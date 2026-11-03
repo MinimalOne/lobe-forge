@@ -80,6 +80,7 @@ from wiki_tool import (  # noqa: E402
     set_verified_field,
     strip_and_splice_trust_fields,
     strip_trust_fields,
+    write_atomic,
 )
 
 
@@ -478,7 +479,7 @@ def add_raw(lobe: str, filename: str, content: str) -> dict[str, Any]:
     if raw_file.exists():  # raw/ is append-only: pages cite a source by path, so its content must not change
         raise RuntimeError(f"{rel} already exists; save the source under another name")
     raw_file.parent.mkdir(parents=True, exist_ok=True)
-    raw_file.write_text(content, encoding="utf-8")
+    write_atomic(raw_file, content)
     git_info = git_commit_and_optional_push(paths["REPO"], f"raw: add {safe_name}", [rel])
     return {"lobe": lobe, "path": rel, **git_info}
 
@@ -614,13 +615,13 @@ def write_page(
         if idx["returncode"] != 0:  # unknown section: a bad request (400), not a conflict
             raise ValueError((idx["stderr"] or idx["stdout"]).strip())
         staged.append(str((paths["WIKI"] / "index.md").relative_to(paths["REPO"])))
-    page_file.write_text(final_content, encoding="utf-8")
+    write_atomic(page_file, final_content)
 
     if log_entry and log_entry.strip():
         log_file = paths["WIKI"] / "log.md"
         existing_log = log_file.read_text(encoding="utf-8") if log_file.exists() else f"# {lobe.title()} Wiki — Log\n"
         sep = "\n" if existing_log.endswith("\n") else "\n\n"
-        log_file.write_text(existing_log + sep + log_entry.strip() + "\n", encoding="utf-8")
+        write_atomic(log_file, existing_log + sep + log_entry.strip() + "\n")
         staged.append(str(log_file.relative_to(paths["REPO"])))
         # after the append, like the local ingest skill; housekeeping only, so a failure skips it
         if run_wiki_tool(lobe, "rotate-log")["returncode"] == 0:
@@ -719,7 +720,7 @@ def verify_page(
     at_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     final_content = set_verified_field(text, by=by_val, at=at_iso, sha=current_hash)
-    page_file.write_text(final_content, encoding="utf-8")
+    write_atomic(page_file, final_content)
 
     staged = [str(page_file.relative_to(paths["REPO"]))]
     git_info = git_commit_and_optional_push(paths["REPO"], f"wiki: verify {clean_slug}", staged)
@@ -835,6 +836,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
                 "lobe": {"type": "string"},
                 "terms": {"type": "array", "items": {"type": "string"}, "description": "Search terms / regex alternations."},
                 "no_decay": {"type": "boolean", "description": "Disable recency decay on last_updated."},
+                "limit": {"type": "integer", "description": "Most pages to return (default 8)."},
             },
             "required": ["lobe", "terms"],
         },
@@ -1009,7 +1011,8 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
         terms = [t for t in args.get("terms", []) if t]
         if not terms:
             raise ValueError("terms must be a non-empty list of search strings")
-        cmd = ["search", *(["--no-decay"] if args.get("no_decay") else []), "--", *terms]
+        limit = ["--limit", str(int(args["limit"]))] if args.get("limit") else []
+        cmd = ["search", *(["--no-decay"] if args.get("no_decay") else []), *limit, "--", *terms]
         return run_wiki_tool(args["lobe"], *cmd)
     if name == "lobe_links":
         return run_wiki_tool(args["lobe"], "links", "--", args["page"])

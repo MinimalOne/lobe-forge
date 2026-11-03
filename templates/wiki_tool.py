@@ -449,6 +449,8 @@ def parse_legacy_fields(text: str) -> dict:
 FENCE_OPEN_RE = re.compile(r"^[ ]{0,3}(`{3,}|~{3,})(.*)$")
 LIST_ITEM_RE = re.compile(r"^[ ]*(?:[*+-]|\d+[.)])[ ]+")
 INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)((?:(?!\n\s*\n).)*?)(?<!`)\1(?!`)", re.DOTALL)
+# shortcut: only rows with a leading pipe count; a table written without one (`a | b`) still pairs across rows
+TABLE_ROW_RE = re.compile(r"(?m)(^[ ]{0,3}\|[^\n]*\n?)")
 
 
 def body_start(lines: list[str]) -> int:
@@ -545,7 +547,8 @@ def mask_code(text: str) -> tuple[str, list[str]]:
         tokens.append(span)
         return tok + ("\n" * span.count("\n"))
 
-    masked = INLINE_CODE_RE.sub(repl, intermediate)
+    # each table row is its own block (GFM), so a stray backtick in one row cannot pair with the next row's
+    masked = "".join(INLINE_CODE_RE.sub(repl, part) for part in TABLE_ROW_RE.split(intermediate))
     return masked, tokens
 
 

@@ -87,3 +87,39 @@ curl -s -X POST https://lobes.example.com/api/lobes/homelab/sync \
   -H "Authorization: Bearer $LOBE_API_TOKEN" -H "Content-Type: application/json" \
   -d '{"push": true}'
 ```
+
+---
+
+## `lobectl` Operator CLI
+
+`lobectl` is a standalone Go binary for human verification and remote lobe management.
+
+### Installation
+
+```bash
+make install # installs to ~/.local/bin/lobectl
+# or:
+go install github.com/MinimalOne/lobe-forge/cmd/lobectl@latest
+```
+
+### Configuration
+
+`lobectl` reads credentials with the following precedence:
+1. CLI flags (`--url`, `--token`, `--by`)
+2. Environment variables (`LOBE_SERVER_URL`, `LOBE_HUMAN_TOKEN`, `LOBE_USER`)
+3. `~/.config/lobe/config.json` or `~/.config/lobe/human.token` (`chmod 0600`)
+
+### Commands
+
+| Command | Description |
+| :--- | :--- |
+| `lobectl verify [review] <lobe> <slug>` | Interactive page review in `$PAGER`, content hash pinning, and human verification confirmation. |
+| `lobectl verify status <lobe> <slug>` | Inspect verification state, reviewer identity, timestamp, and content hashes. |
+| `lobectl verify list <lobe>` | List pages that changed since human review (failing Check `V`). |
+| `lobectl verify stamp <lobe> <slug...> [--yes]` | Direct non-interactive verification stamping. |
+| `lobectl list` | List all lobes hosted on the server. |
+| `lobectl lint <lobe> [--strict]` | Run audit on a remote lobe. |
+| `lobectl sync <lobe>` | Trigger git pull/rebase and push on the server. |
+| `lobectl export <lobe> [--out <dir>]` | Download Open Knowledge Format v0.2 bundle to disk. |
+| `lobectl version` | Print lobectl version. |
+

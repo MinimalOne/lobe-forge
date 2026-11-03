@@ -171,6 +171,18 @@ def test_wiki_links_in_list_continuation():
         assert wiki_links_in(doc) == want, f"{doc!r}: {wiki_links_in(doc)}"
 
 
+def test_wiki_links_in_table_rows():
+    # a row cut off mid code span must not hide the links in the rows after it
+    doc = ("| Page | Description |\n|---|---|\n"
+           "| [[cut]] | uses `QUEUE_SI… |\n"
+           "| [[row-2]] | plain |\n"
+           "| [[row-3]] | set `cdn.status` then… |\n"
+           "| [[row-4]] | `[[in-code]]` stays code |\n")
+    assert wiki_links_in(doc) == ["cut", "row-2", "row-3", "row-4"], wiki_links_in(doc)
+    # outside tables a code span still spans lines within a paragraph
+    assert wiki_links_in("a `x\n[[hidden]] y` b\n") == []
+
+
 def test_wiki_links_in_ignores_code():
     doc = """---
 summary: Summary mentions [[summary-link]].
@@ -897,6 +909,7 @@ if __name__ == "__main__":
     test_mask_code_line_count()
     test_body_start()
     test_wiki_links_in_list_continuation()
+    test_wiki_links_in_table_rows()
     test_wiki_links_in_ignores_code()
     test_flow_mapping_parser()
     test_strip_and_splice_trust_fields()

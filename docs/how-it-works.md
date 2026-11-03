@@ -23,6 +23,15 @@ Pages are plain Markdown. A small block of fields at the top of each page (YAML 
 
 In short: the AI can write pages, but only a person can mark a page as checked, and that check lapses as soon as the page changes.
 
+```mermaid
+stateDiagram-v2
+  [*] --> Unreviewed: AI writes (server stamps generated)
+  Unreviewed --> Verified: a person verifies the content hash
+  Verified --> ChangedSinceReview: any later edit changes the hash
+  ChangedSinceReview --> Verified: a person verifies again
+  ChangedSinceReview --> ChangedSinceReview: more edits
+```
+
 An AI wrote most of your wiki, so every page answers two questions in its frontmatter:
 
 ```yaml

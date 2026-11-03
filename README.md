@@ -21,6 +21,20 @@ Each topic gets its own wiki, called a **lobe**: `homelab`, `work`, `family`, `g
 
 ![Demo: create a lobe, add Karpathy's LLM wiki gist, ingest it, ask a question](docs/demo.gif)
 
+```mermaid
+flowchart LR
+  S["Sources<br/>web page, PDF, notes"] -->|add-raw| R["raw/"]
+  R -->|ingest| W["wiki/ pages<br/>cited and linked"]
+  W -->|ask| A["Answer with citations"]
+  subgraph Lobe["A lobe: one Git repository"]
+    R
+    W
+  end
+  T1["Claude Code"] -->|MCP| Lobe
+  T2["Codex, Gemini CLI, Cursor"] -->|MCP| Lobe
+  T3["Claude.ai, mobile"] -->|MCP| Lobe
+```
+
 ## Words you'll see
 
 | Word | What it means |

@@ -31,6 +31,8 @@ ROOT = Path(__file__).resolve().parent.parent
 FORGE_SCRIPT = ROOT / "scripts" / "forge.py"
 PLUGIN_JSON = ROOT / ".claude-plugin" / "plugin.json"
 SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")  # page slugs; lobe names use forge.NAME_RE
+# existing pages may carry dots (k8s-1.29): verify accepts them, while new pages still need SLUG_RE
+PAGE_NAME_RE = re.compile(r"^[a-z0-9]+([.-][a-z0-9]+)*$")
 # ThreadingHTTPServer runs requests in parallel; one lock keeps page check-then-write and git commits atomic.
 _WRITE_LOCK = threading.RLock()
 
@@ -662,8 +664,8 @@ def verify_page(
     """Human verification of a wiki page pinned by its page_hash (content without trust fields).
     Only reachable through the human-gated REST route; never exposed as an MCP tool."""
     clean_slug = page_name(slug)
-    if not SLUG_RE.match(clean_slug):
-        raise ValueError(f"Invalid page slug: {slug!r} (expected lowercase letters, digits, hyphens)")
+    if not PAGE_NAME_RE.match(clean_slug):
+        raise ValueError(f"Invalid page slug: {slug!r} (expected lowercase letters, digits, hyphens, dots)")
     paths = l_paths(lobe)
     page_file = paths["WIKI"] / f"{clean_slug}.md"
     if not page_file.is_file():
@@ -1192,7 +1194,7 @@ def verify_status(lobe: str, slug: str) -> dict[str, Any]:
     """Current page_hash and whether the stored `verified:` stamp still matches it."""
     clean_slug = page_name(slug)
     page_file = l_paths(lobe)["WIKI"] / f"{clean_slug}.md"
-    if not SLUG_RE.match(clean_slug) or not page_file.is_file():
+    if not PAGE_NAME_RE.match(clean_slug) or not page_file.is_file():
         raise FileNotFoundError(f"Page '{clean_slug}' not found in lobe '{lobe}'")
     text = page_file.read_text(encoding="utf-8")
     current = page_hash(text)

@@ -1403,6 +1403,19 @@ def test_part8_verification_channel_and_auth() -> None:
         assert lint_res["returncode"] == 0  # soft warning
         assert "content changed since review by human:bob" in lint_res["stdout"]
 
+        # 9b. A dotted page (readable since PR #19, not creatable by write_page) can be verified
+        dotted = paths["WIKI"] / "k8s-1.29.md"
+        dotted.write_text(page_file.read_text(encoding="utf-8").replace("verified:", "x-old:"), encoding="utf-8")
+        code, st = app.dispatch_http("GET", "/api/lobes/verlobe/pages/k8s-1.29/verify", b"", "Bearer agent-secret-token")
+        assert code == 200 and st["slug"] == "k8s-1.29" and st["is_verified"] is False, (code, st)
+        code, res = app.dispatch_http("POST", "/api/lobes/verlobe/pages/k8s-1.29/verify",
+                                      json.dumps({"expected_hash": st["hash"], "by": "bob"}).encode(), "Bearer human-secret-token")
+        assert code == 200 and res["verified"]["sha"] == st["hash"], (code, res)
+        assert "verified:" in dotted.read_text(encoding="utf-8")
+        for bad in ("..", ".hidden", "k8s-1.", "a..b"):
+            code, _ = app.dispatch_http("GET", f"/api/lobes/verlobe/pages/{bad}/verify", b"", "Bearer agent-secret-token")
+            assert code == 404, (bad, code)
+
         # 10. Frontmatter from git is escaped in the HTML page
         text = page_file.read_text(encoding="utf-8").replace('by: "human:bob"', 'by: "<script>alert(1)</script>"')
         page_file.write_text(text, encoding="utf-8")

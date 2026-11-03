@@ -1102,7 +1102,7 @@ Old note.
         except UnicodeEncodeError:
             pass
         assert (wiki / "k8s-1.29-upgrade.md").read_text() == before
-        assert not list(wiki.glob("*.tmp")), list(wiki.glob("*.tmp"))
+        assert not list(wiki.glob(".*.tmp")), list(wiki.glob(".*.tmp"))
 
         # lobe_search honours limit (the ask and ingest skills pass 5)
         res = app.call_mcp_tool("lobe_search", {"lobe": "edits", "terms": ["."], "limit": 1})

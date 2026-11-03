@@ -15,11 +15,13 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app  # noqa: E402
@@ -88,8 +90,13 @@ def test_part1_core_and_git_scenarios() -> None:
         assert raw_res["pushed"] is False
         assert raw_res["path"] == "raw/2026-10-30-pi5-notes.md"
 
+        # The server runs its own wiki_tool.py, not the lobe's copy that an image upgrade leaves behind
+        lobe_copy = tmp_path / "lobes" / "hack" / "wiki_tool.py"
+        lobe_copy_text = lobe_copy.read_text()
+        lobe_copy.write_text("import sys; sys.exit('stale lobe copy ran')\n")
         pending = app.run_wiki_tool("hack", "pending")
-        assert pending["returncode"] == 0 and "2026-10-30-pi5-notes.md" in pending["stdout"]
+        lobe_copy.write_text(lobe_copy_text)
+        assert pending["returncode"] == 0 and "2026-10-30-pi5-notes.md" in pending["stdout"], pending
 
         # 4. Write wiki page + index-add -> commits locally, search & lint --strict pass
         page_res = app.write_page(
@@ -131,7 +138,24 @@ def test_part1_core_and_git_scenarios() -> None:
         cfg_on = app.configure_remote("hack", str(bare_remote), autopush=True)
         assert cfg_on["autopush"] is True
 
-        raw_res3 = app.add_raw("hack", "2026-10-30-pushed.md", "Synced note.\n")
+        # the push runs after the write lock is released: another thread can write meanwhile
+        real_push, lock_free = app.push_origin, []
+
+        def spy_push(repo):
+            def try_lock():
+                lock_free.append(app._WRITE_LOCK.acquire(timeout=5))
+                app._WRITE_LOCK.release()
+            t = threading.Thread(target=try_lock)
+            t.start()
+            t.join()
+            return real_push(repo)
+
+        app.push_origin = spy_push
+        try:
+            raw_res3 = app.add_raw("hack", "2026-10-30-pushed.md", "Synced note.\n")
+        finally:
+            app.push_origin = real_push
+        assert lock_free == [True], lock_free
         assert raw_res3["committed"] is True and raw_res3["pushed"] is True and raw_res3["push_error"] is None
 
         remote_log_after = subprocess.run(
@@ -1052,6 +1076,17 @@ Old note.
         assert app.dispatch_http("POST", "/api/lobes/edits/raw", b"[1, 2]")[0] == 400  # not a JSON object
         status, body = app.dispatch_http("POST", "/mcp", b"[1, 2]")
         assert status == 200 and body["error"]["code"] == -32600, (status, body)
+
+        # A search regex that backtracks without end is killed instead of pinning a CPU
+        app.write_page("edits", "redos", "a" * 40 + "!\n")
+        app.WIKI_TOOL_TIMEOUT = 1
+        try:
+            started = time.time()
+            status, body = app.dispatch_http("GET", "/api/lobes/edits/search?q=" + quote("(a+)+$"), b"")
+            assert status == 409 and "timed out" in body["error"], (status, body)
+            assert time.time() - started < 10
+        finally:
+            app.WIKI_TOOL_TIMEOUT = 30
 
         # REST routes go through the MCP tools: same purpose, same skills, same errors
         assert app.dispatch_http("GET", "/api/lobes", b"")[1]["lobes"][0]["purpose"] == "Docs layout"

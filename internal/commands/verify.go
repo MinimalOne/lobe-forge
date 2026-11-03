@@ -38,6 +38,7 @@ func RunVerifyStatus(ctx context.Context, cli *client.Client, lobe, slug string,
 	}
 
 	fmt.Printf("%s: %s\n", ui.Bold("Current Hash"), st.Hash)
+	sanitizeStamp(st)
 	if st.Verified != nil {
 		fmt.Printf("%s: %s\n", ui.Bold("Reviewed Hash"), st.Verified.Sha)
 		fmt.Printf("%s: %s\n", ui.Bold("Reviewer"), st.Verified.By)
@@ -45,6 +46,17 @@ func RunVerifyStatus(ctx context.Context, cli *client.Client, lobe, slug string,
 	}
 
 	return nil
+}
+
+// sanitizeStamp strips control characters from the stored stamp: the server reads it from page
+// frontmatter, so it must never reach the reviewer's terminal raw.
+func sanitizeStamp(st *client.VerifyStatus) {
+	if st.Verified == nil {
+		return
+	}
+	st.Verified.By = ui.StripControl(st.Verified.By)
+	st.Verified.At = ui.StripControl(st.Verified.At)
+	st.Verified.Sha = ui.StripControl(st.Verified.Sha)
 }
 
 // RunVerifyReview performs an interactive review with a pager and confirmation prompt.
@@ -71,6 +83,7 @@ func RunVerifyReview(ctx context.Context, cli *client.Client, cfg *config.Config
 	// The page, the prompt and the answer all go through the controlling terminal, never stdin/stdout:
 	// piped input cannot answer, and redirected stdout cannot hide the page from the reviewer., 	// shortcut: anything that can drive a pty as this user (expect, script) still can; only a credential kept off
 	// this machine (the browser verify page, per-reviewer OAuth) keeps agents out entirely.
+	sanitizeStamp(st)
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("verification needs an interactive terminal: %w", err)

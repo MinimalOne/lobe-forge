@@ -420,8 +420,18 @@ def sync_lobe(lobe: str, push: bool = True) -> dict[str, Any]:
 
 
 def run_wiki_tool(lobe: str, *args: str) -> dict[str, Any]:
-    lobe_dir = resolve_lobe(lobe)
-    r = subprocess.run([str(lobe_dir / "wikictl"), *args], capture_output=True, text=True)
+    # the image's wiki_tool.py, not the lobe's copy: that copy is frozen at create time, so after an
+    # image upgrade lint and search would run old rules while the server hashes and splices with new ones
+    paths = l_paths(lobe)
+    env = {
+        **os.environ,
+        "WIKI_ROOT": str(paths["REPO"]),
+        "WIKI_DIR": str(paths["WIKI"].relative_to(paths["REPO"])),
+        "WIKI_RAW_DIR": str(paths["RAW"].relative_to(paths["REPO"])),
+        "WIKI_CATALOG": str(paths["LOBE"] / "catalog.jsonl"),
+    }
+    r = subprocess.run([sys.executable, str(ROOT / "templates" / "wiki_tool.py"), *args],
+                       capture_output=True, text=True, env=env)
     return {
         "returncode": r.returncode,
         "stdout": r.stdout,
@@ -584,8 +594,8 @@ def write_page(
         sep = "\n" if existing_log.endswith("\n") else "\n\n"
         log_file.write_text(existing_log + sep + log_entry.strip() + "\n", encoding="utf-8")
         staged.append(str(log_file.relative_to(paths["REPO"])))
-        # after the append, like the local ingest skill; housekeeping only: older tooling lacks rotate-log
-        if run_wiki_tool(lobe, "rotate-log")["returncode"] == 0 and (paths["WIKI"] / "log").is_dir():
+        # after the append, like the local ingest skill; housekeeping only, so a failure skips it
+        if run_wiki_tool(lobe, "rotate-log")["returncode"] == 0:
             staged.append(str((paths["WIKI"] / "log").relative_to(paths["REPO"])))
 
     action = "create" if is_new else "update"

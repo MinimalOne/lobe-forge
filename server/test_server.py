@@ -88,8 +88,13 @@ def test_part1_core_and_git_scenarios() -> None:
         assert raw_res["pushed"] is False
         assert raw_res["path"] == "raw/2026-10-30-pi5-notes.md"
 
+        # The server runs its own wiki_tool.py, not the lobe's copy that an image upgrade leaves behind
+        lobe_copy = tmp_path / "lobes" / "hack" / "wiki_tool.py"
+        lobe_copy_text = lobe_copy.read_text()
+        lobe_copy.write_text("import sys; sys.exit('stale lobe copy ran')\n")
         pending = app.run_wiki_tool("hack", "pending")
-        assert pending["returncode"] == 0 and "2026-10-30-pi5-notes.md" in pending["stdout"]
+        lobe_copy.write_text(lobe_copy_text)
+        assert pending["returncode"] == 0 and "2026-10-30-pi5-notes.md" in pending["stdout"], pending
 
         # 4. Write wiki page + index-add -> commits locally, search & lint --strict pass
         page_res = app.write_page(

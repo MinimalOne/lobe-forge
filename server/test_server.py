@@ -164,6 +164,20 @@ def test_part1_core_and_git_scenarios() -> None:
         assert "raw: add 2026-10-30-pushed.md" in remote_log_after.stdout
         assert "wiki: create pi5-setup" in remote_log_after.stdout
 
+        # A rejected auto-push is reported, and the commit stays local until sync reconciles it
+        other = tmp_path / "other-clone"
+        subprocess.run(["git", "clone", "-q", str(bare_remote), str(other)], check=True)
+        (other / "raw" / "2026-10-30-elsewhere.md").write_text("Pushed from another clone.\n")
+        for cmd in (["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "elsewhere"], ["push", "-q"]):
+            subprocess.run(["git", "-C", str(other), *cmd], check=True)
+        rejected = app.add_raw("hack", "2026-10-30-rejected.md", "Push will be rejected.\n")
+        assert rejected["committed"] is True and rejected["pushed"] is False, rejected
+        assert rejected["push_error"] and "rejected" in rejected["push_error"], rejected
+        assert "raw: add 2026-10-30-rejected.md" not in subprocess.run(
+            ["git", "-C", str(bare_remote), "log", "--oneline"], capture_output=True, text=True, check=True).stdout
+        synced = app.sync_lobe("hack")
+        assert synced["pulled"] is True and synced["pushed"] is True, synced
+
         # 6b. A lobe's own autopush=false beats LOBE_GIT_PUSH=1; an unset one follows it
         os.environ["LOBE_GIT_PUSH"] = "1"
         try:
@@ -1076,6 +1090,9 @@ Old note.
         assert app.dispatch_http("POST", "/api/lobes/edits/raw", b"[1, 2]")[0] == 400  # not a JSON object
         status, body = app.dispatch_http("POST", "/mcp", b"[1, 2]")
         assert status == 200 and body["error"]["code"] == -32600, (status, body)
+        # params that is not an object is answered, not raised (over stdio a raise ends the session)
+        resp = app.handle_mcp_message({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": [1]})
+        assert resp["id"] == 9 and resp["result"]["isError"] is True, resp
 
         # A search regex that backtracks without end is killed instead of pinning a CPU
         app.write_page("edits", "redos", "a" * 40 + "!\n")

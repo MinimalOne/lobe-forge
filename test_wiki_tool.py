@@ -326,6 +326,15 @@ def test_parser_empty_key_and_flat_flow():
     assert fm["atoms"] == [] and fm["sources"] == ["a.md"] and fm["g"] == {"by": "a", "at": "b"}, fm
 
 
+def test_source_count_missing_means_listed():
+    from wiki_tool import parse_page
+    page = "---\ntitle: t\nsummary: s\nprovenance:\n  - chat\n---\nbody\n"
+    assert parse_page(Path("p.md"), page)["source_count"] == 0  # not -1: lint G would block a valid page
+    two = "---\ntitle: t\nsources:\n  - raw/a.md\n  - raw/b.md\n---\nbody\n"
+    assert parse_page(Path("p.md"), two)["source_count"] == 2
+    assert parse_page(Path("p.md"), two.replace("sources:", "source_count: 1\nsources:"))["source_count"] == 1
+
+
 def test_cmd_stamp():
     import argparse
     import tempfile
@@ -916,6 +925,7 @@ if __name__ == "__main__":
     test_trust_fields_cannot_be_forged()
     test_strip_trust_fields()
     test_parser_empty_key_and_flat_flow()
+    test_source_count_missing_means_listed()
     test_cmd_stamp()
     test_page_hash()
     test_set_verified_field()

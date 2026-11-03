@@ -2,6 +2,14 @@
 
 `lobe-server` hosts all your lobes on one machine you control (a home server, Raspberry Pi, or VPS) and serves them over MCP and a REST API. Every AI tool you connect, from Claude Code and Codex on your laptop to Claude on your phone and a personal agent such as Hermes Agent, then shares the same second brain, with no wiki files on the devices themselves. It uses only the Python standard library.
 
+**What you need:**
+
+- A machine that stays on and runs Docker (Python 3.10 and Git also work, without Docker).
+- To reach it from other devices or your phone: a domain name and a reverse proxy with HTTPS (nginx, Caddy, Traefik).
+- Optional: a Git host account (GitHub, Codeberg, GitLab...) for off-server backups, and an identity provider (Authentik, Keycloak...) for Claude.ai and the Claude mobile app.
+
+Steps 1 and 2 are enough to start; steps 3 to 5 are optional.
+
 Images for `linux/amd64` and `linux/arm64` are published to `ghcr.io/minimalone/lobe-forge` on every release, tagged `<X.Y.Z>`, `v<X.Y.Z>`, `<X.Y>`, and `latest`.
 
 ## 1. Start the server
@@ -125,7 +133,7 @@ LOBE_HUMAN_TOKEN=<long random token>
 LOBE_HUMAN_CLIENT_ID=<client id>
 ```
 
-Then verify pages using `lobectl` from your terminal:
+Then verify pages with `lobectl` from your terminal ([install and configure it](reference.md#lobectl-operator-cli)):
 
 ```bash
 # Verify a page interactively (shows it in a pager, pins its content hash, asks on the terminal)

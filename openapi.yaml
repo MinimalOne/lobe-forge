@@ -254,6 +254,13 @@ paths:
           schema:
             type: boolean
             default: false
+        - name: all
+          in: query
+          required: false
+          description: List every issue instead of at most 20 per check
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
           description: Lint audit output from wiki_tool.py

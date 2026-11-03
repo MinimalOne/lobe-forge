@@ -29,6 +29,12 @@ jobs:
       - run: python3 server/test_server.py
       - run: python3 test_wiki_tool.py
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+
       - id: next
         run: python3 scripts/release.py --notes "$RUNNER_TEMP/notes.md" >> "$GITHUB_OUTPUT"
 

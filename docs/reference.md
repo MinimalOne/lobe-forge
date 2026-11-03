@@ -58,7 +58,7 @@ The full specification is in [`openapi.yaml`](../openapi.yaml) (OpenAPI 3.1). Se
 | `GET` | `/api/lobes/{lobe}/links/{page}` | Incoming and outgoing links of a page. |
 | `GET` | `/api/lobes/{lobe}/sections` | `## Section` headings in `wiki/index.md`. |
 | `GET` | `/api/lobes/{lobe}/pending` | Sources in `raw/` that no page cites. |
-| `GET` | `/api/lobes/{lobe}/lint?strict=true` | Wiki health check (`returncode: 0` when clean). |
+| `GET` | `/api/lobes/{lobe}/lint?strict=true` | Wiki health check (`returncode: 0` when clean). Add `all=true` to list every issue, not 20 per check. |
 | `GET` | `/api/lobes/{lobe}/export-okf` | Export `index.md` and the wiki pages (not the logs) as an Open Knowledge Format (OKF) v0.2 bundle. REST only: there is no MCP tool, since one call would return the whole wiki. |
 | `POST` | `/api/lobes/{lobe}/raw` | Save a source and commit. Body: `{"filename", "content"}`. Returns `409` if the file already exists. |
 | `GET` | `/api/lobes/{lobe}/raw/{filename}` | Read a source. |
@@ -87,3 +87,42 @@ curl -s -X POST https://lobes.example.com/api/lobes/homelab/sync \
   -H "Authorization: Bearer $LOBE_API_TOKEN" -H "Content-Type: application/json" \
   -d '{"push": true}'
 ```
+
+---
+
+## `lobectl` Operator CLI
+
+`lobectl` is a standalone Go binary for human verification and remote lobe management.
+
+### Installation
+
+```bash
+make install # installs to ~/.local/bin/lobectl
+# or:
+go install github.com/MinimalOne/lobe-forge/cmd/lobectl@latest
+```
+
+### Configuration
+
+`lobectl` reads credentials with the following precedence:
+1. CLI flags (`--url`, `--token`, `--by`)
+2. Environment variables (`LOBE_SERVER_URL`, `LOBE_HUMAN_TOKEN`, `LOBE_USER`)
+3. `~/.config/lobe/config.json` or `~/.config/lobe/human.token` (`chmod 0600`)
+
+A token on disk or in your environment is readable by any agent that runs as your user. `lobectl` reads the confirmation from the terminal (`/dev/tty`), not stdin, so piping `yes` into it does not work. But anything that can drive a terminal as you still can. For a review no agent on your machine can give, keep the human credential off that machine and use the browser verify page or a per-person OAuth client (`LOBE_HUMAN_CLIENT_ID`).
+
+Flags work before or after the command (`lobectl export hack --out dir`).
+
+### Commands
+
+| Command | Description |
+| :--- | :--- |
+| `lobectl verify [review] <lobe> <slug>` | Shows the page in `$PAGER` (control characters stripped), pins its content hash, and asks for confirmation on the terminal. There is no non-interactive verify. |
+| `lobectl verify status <lobe> <slug>` | Inspect verification state, reviewer identity, timestamp, and content hashes. |
+| `lobectl verify list <lobe>` | List every page that changed since human review (failing Check `V`). |
+| `lobectl list` | List all lobes hosted on the server. |
+| `lobectl lint <lobe> [--strict]` | Run audit on a remote lobe. |
+| `lobectl sync <lobe>` | Trigger git pull/rebase and push on the server. |
+| `lobectl export <lobe> [--out <dir>]` | Download Open Knowledge Format v0.2 bundle to disk. |
+| `lobectl version` | Print lobectl version. |
+

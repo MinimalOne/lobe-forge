@@ -1,0 +1,40 @@
+package ui
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"strings"
+)
+
+// AskConfirmation prompts the user for verification action.
+// Returns "y" (yes), "n" (no), "v" (view), "q" (quit). Pass the same *bufio.Reader across
+// calls so input buffered by one call is not lost to the next.
+func AskConfirmation(r io.Reader, w io.Writer, prompt string) (string, error) {
+	reader, ok := r.(*bufio.Reader)
+	if !ok {
+		reader = bufio.NewReader(r)
+	}
+	for {
+		fmt.Fprint(w, prompt)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		ans := strings.ToLower(strings.TrimSpace(line))
+		switch ans {
+		case "y", "yes":
+			return "y", nil
+		case "n", "no":
+			return "n", nil
+		case "v", "view":
+			return "v", nil
+		case "q", "quit":
+			return "q", nil
+		case "":
+			return "n", nil
+		default:
+			fmt.Fprintln(w, "Please enter 'y' to verify, 'n' to skip, 'v' to view content, or 'q' to quit.")
+		}
+	}
+}

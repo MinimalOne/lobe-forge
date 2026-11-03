@@ -125,7 +125,17 @@ LOBE_HUMAN_TOKEN=<long random token>
 LOBE_HUMAN_CLIENT_ID=<client id>
 ```
 
-Then open `https://lobes.example.com/api/lobes/<lobe>/pages/<slug>/verify?token=<human token>` in a browser and click **Verify this page**. `wikictl lint` reports a verified page as "changed since review" (check V) once its content changes.
+Then verify pages using `lobectl` from your terminal:
+
+```bash
+# Verify a page interactively (shows it in a pager, pins its content hash, asks on the terminal)
+lobectl verify <lobe> <slug>
+
+# Or view pages needing review (failing Check V)
+lobectl verify list <lobe>
+```
+
+Alternatively, open `https://lobes.example.com/api/lobes/<lobe>/pages/<slug>/verify?token=<human token>` in a browser and click **Verify this page**. `wikictl lint` (or `lobectl lint <lobe>`) reports a verified page as "changed since review" (check V) once its content changes.
 
 ## Upgrade
 

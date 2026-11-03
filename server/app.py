@@ -1056,6 +1056,8 @@ def handle_mcp_message(msg: dict[str, Any]) -> dict[str, Any] | None:
     method = msg.get("method", "")
     msg_id = msg.get("id")
     params = msg.get("params") or {}
+    if not isinstance(params, dict):  # a list here must not raise: over stdio that would end the session
+        params = {}
 
     if "id" not in msg:
         return None  # JSON-RPC notification (e.g. notifications/initialized)
@@ -1407,6 +1409,8 @@ MAX_BODY = 10 * 1024 * 1024  # far above any wiki page or raw source an agent se
 
 
 class LobeHTTPHandler(BaseHTTPRequestHandler):
+    timeout = 60  # seconds per socket read: a client that stops sending must not hold its thread forever
+
     def _handle(self, method: str) -> None:
         try:
             length = int(self.headers.get("Content-Length") or "0")

@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+// UserAgent is sent with every request; main sets it to include the build version.
+var UserAgent = "lobectl"
+
 // Client interacts with the lobe-server REST API.
 type Client struct {
 	BaseURL    string
@@ -47,7 +50,7 @@ func (c *Client) doRequest(ctx context.Context, method, endpoint string, body an
 		return fmt.Errorf("create request: %w", err)
 	}
 
-	req.Header.Set("User-Agent", "lobectl/1.0")
+	req.Header.Set("User-Agent", UserAgent)
 	if bodyReader != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -126,12 +129,9 @@ func (c *Client) GetPage(ctx context.Context, lobe, slug string) (*PageContent, 
 	return &pc, nil
 }
 
-// GetLint runs server-side linting on the lobe.
-func (c *Client) GetLint(ctx context.Context, lobe string, strict bool) (*LintResult, error) {
-	endpoint := fmt.Sprintf("/api/lobes/%s/lint", url.PathEscape(lobe))
-	if strict {
-		endpoint += "?strict=true"
-	}
+// GetLint runs server-side linting on the lobe; all lifts the server's 20-issues-per-check limit.
+func (c *Client) GetLint(ctx context.Context, lobe string, strict, all bool) (*LintResult, error) {
+	endpoint := fmt.Sprintf("/api/lobes/%s/lint?strict=%t&all=%t", url.PathEscape(lobe), strict, all)
 	var res LintResult
 	if err := c.doRequest(ctx, http.MethodGet, endpoint, nil, &res); err != nil {
 		return nil, err

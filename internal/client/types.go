@@ -62,12 +62,11 @@ type LobeListResult struct {
 
 // SyncResult represents the response from POST /api/lobes/{lobe}/sync.
 type SyncResult struct {
-	Lobe      string  `json:"lobe"`
-	Status    string  `json:"status"`
-	Commit    string  `json:"commit"`
-	Pulled    bool    `json:"pulled"`
-	Pushed    bool    `json:"pushed"`
-	PushError *string `json:"push_error"`
+	Lobe   string `json:"lobe"`
+	Remote string `json:"remote"`
+	Commit string `json:"commit"`
+	Pulled bool   `json:"pulled"`
+	Pushed bool   `json:"pushed"`
 }
 
 // ExportFile represents an individual file inside an OKF export.

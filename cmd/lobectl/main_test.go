@@ -7,11 +7,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/MinimalOne/lobe-forge/internal/client"
 	"github.com/MinimalOne/lobe-forge/internal/commands"
-	"github.com/MinimalOne/lobe-forge/internal/config"
 )
 
 func TestLobectlCommandsWithMockServer(t *testing.T) {
@@ -71,7 +71,7 @@ func TestLobectlCommandsWithMockServer(t *testing.T) {
 		case r.URL.Path == "/api/lobes/hack/sync" && r.Method == http.MethodPost:
 			_ = json.NewEncoder(w).Encode(client.SyncResult{
 				Lobe:   "hack",
-				Status: "up to date",
+				Remote: "https://github.com/jijinp/hack.git",
 				Commit: "commitabc",
 				Pulled: true,
 				Pushed: true,
@@ -94,11 +94,6 @@ func TestLobectlCommandsWithMockServer(t *testing.T) {
 	defer mockServer.Close()
 
 	cli := client.New(mockServer.URL, "mock-token")
-	cfg := &config.Config{
-		ServerURL:  mockServer.URL,
-		HumanToken: "mock-token",
-		Reviewer:   "jijin",
-	}
 	ctx := context.Background()
 
 	// 1. Test List
@@ -109,11 +104,6 @@ func TestLobectlCommandsWithMockServer(t *testing.T) {
 	// 2. Test Verify Status
 	if err := commands.RunVerifyStatus(ctx, cli, "hack", "test-slug", false); err != nil {
 		t.Fatalf("RunVerifyStatus failed: %v", err)
-	}
-
-	// 3. Test Verify Stamp
-	if err := commands.RunVerifyStamp(ctx, cli, cfg, "hack", []string{"test-slug"}, true, false); err != nil {
-		t.Fatalf("RunVerifyStamp failed: %v", err)
 	}
 
 	// 4. Test Verify List (parses Check V)
@@ -143,5 +133,18 @@ func TestLobectlCommandsWithMockServer(t *testing.T) {
 	}
 	if string(content) != "# OKF Index" {
 		t.Fatalf("unexpected export content: %s", string(content))
+	}
+}
+
+func TestParseArgsAcceptsFlagsAfterPositionals(t *testing.T) {
+	o, pos, err := parseArgs([]string{"export", "hack", "--out", "dir", "--json", "lint", "--strict", "--url=http://x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.out != "dir" || !o.json || !o.strict || o.url != "http://x" {
+		t.Fatalf("flags not parsed: %+v", o)
+	}
+	if strings.Join(pos, " ") != "export hack lint" {
+		t.Fatalf("positionals: %q", pos)
 	}
 }

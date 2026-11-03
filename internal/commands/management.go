@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/MinimalOne/lobe-forge/internal/client"
@@ -49,7 +50,7 @@ func RunList(ctx context.Context, cli *client.Client, jsonOutput bool) error {
 
 // RunLint runs server-side linting on a lobe and displays the output.
 func RunLint(ctx context.Context, cli *client.Client, lobe string, strict, jsonOutput bool) error {
-	res, err := cli.GetLint(ctx, lobe, strict)
+	res, err := cli.GetLint(ctx, lobe, strict, false)
 	if err != nil {
 		return err
 	}
@@ -61,13 +62,13 @@ func RunLint(ctx context.Context, cli *client.Client, lobe string, strict, jsonO
 	}
 
 	if res.Stdout != "" {
-		fmt.Print(res.Stdout)
+		fmt.Print(ui.StripControl(res.Stdout))
 		if !strings.HasSuffix(res.Stdout, "\n") {
 			fmt.Println()
 		}
 	}
 	if res.Stderr != "" {
-		fmt.Fprint(os.Stderr, res.Stderr)
+		fmt.Fprint(os.Stderr, ui.StripControl(res.Stderr))
 		if !strings.HasSuffix(res.Stderr, "\n") {
 			fmt.Fprintln(os.Stderr)
 		}
@@ -92,14 +93,8 @@ func RunSync(ctx context.Context, cli *client.Client, lobe string, jsonOutput bo
 		return enc.Encode(res)
 	}
 
-	fmt.Printf("Sync %s: %s\n", ui.Cyan(lobe), ui.Bold(res.Status))
-	if res.Commit != "" {
-		fmt.Printf("Commit: %s (pulled: %v, pushed: %v)\n", res.Commit, res.Pulled, res.Pushed)
-	}
-	if res.PushError != nil && *res.PushError != "" {
-		fmt.Printf("Push Warning: %s\n", ui.Yellow(*res.PushError))
-	}
-
+	fmt.Printf("Synced %s with %s (commit: %s, pulled: %v, pushed: %v)\n",
+		ui.Cyan(lobe), res.Remote, res.Commit, res.Pulled, res.Pushed)
 	return nil
 }
 
@@ -124,10 +119,16 @@ func RunExport(ctx context.Context, cli *client.Client, lobe, outDir string, jso
 		return fmt.Errorf("create export directory %s: %w", outDir, err)
 	}
 
+	// File paths come from the server: check them all before writing anything outside outDir.
+	for _, f := range res.Files {
+		if !filepath.IsLocal(filepath.FromSlash(f.Path)) {
+			return fmt.Errorf("refusing export file with unsafe path %q", f.Path)
+		}
+	}
 	count := 0
 	for _, f := range res.Files {
-		target := fmt.Sprintf("%s/%s", strings.TrimRight(outDir, "/"), strings.TrimLeft(f.Path, "/"))
-		if err := os.MkdirAll(target[:strings.LastIndex(target, "/")], 0755); err != nil {
+		target := filepath.Join(outDir, filepath.FromSlash(f.Path))
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			return fmt.Errorf("create dir for %s: %w", target, err)
 		}
 		if err := os.WriteFile(target, []byte(f.Content), 0644); err != nil {

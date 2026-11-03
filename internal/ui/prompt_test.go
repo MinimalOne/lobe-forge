@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bufio"
 	"strings"
 	"testing"
 )
@@ -28,6 +29,15 @@ func TestAskConfirmation(t *testing.T) {
 		}
 		if ans != tt.expected {
 			t.Errorf("for input %q expected %q, got %q", tt.input, tt.expected, ans)
+		}
+	}
+}
+
+func TestAskConfirmationSharedReaderKeepsBufferedInput(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("n\ny\n"))
+	for _, want := range []string{"n", "y"} {
+		if got, err := AskConfirmation(r, ""); err != nil || got != want {
+			t.Fatalf("got %q, %v; want %q", got, err, want)
 		}
 	}
 }

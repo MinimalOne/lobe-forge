@@ -43,6 +43,7 @@ func Resolve(flagURL, flagToken, flagReviewer string) (*Config, error) {
 					cfg.ServerURL = fileCfg.ServerURL
 				}
 				if fileCfg.HumanToken != "" {
+					warnIfOpen(cfgFile)
 					cfg.HumanToken = fileCfg.HumanToken
 				}
 				if fileCfg.Reviewer != "" {
@@ -53,12 +54,8 @@ func Resolve(flagURL, flagToken, flagReviewer string) (*Config, error) {
 
 		// Try ~/.config/lobe/human.token if token not already set
 		tokenFile := filepath.Join(cfgDir, "human.token")
-		if info, err := os.Stat(tokenFile); err == nil {
-			// Check file permissions and warn if too open (> 0600)
-			mode := info.Mode().Perm()
-			if mode&0077 != 0 {
-				fmt.Fprintf(os.Stderr, "Warning: %s has permissive permissions (%04o). Recommended: chmod 0600 %s\n", tokenFile, mode, tokenFile)
-			}
+		if _, err := os.Stat(tokenFile); err == nil {
+			warnIfOpen(tokenFile)
 			if cfg.HumanToken == "" {
 				if data, err := os.ReadFile(tokenFile); err == nil {
 					cfg.HumanToken = strings.TrimSpace(string(data))
@@ -104,4 +101,11 @@ func Resolve(flagURL, flagToken, flagReviewer string) (*Config, error) {
 	cfg.ServerURL = strings.TrimRight(cfg.ServerURL, "/")
 
 	return cfg, nil
+}
+
+// warnIfOpen warns when a file holding the human token is readable by group or others.
+func warnIfOpen(path string) {
+	if info, err := os.Stat(path); err == nil && info.Mode().Perm()&0077 != 0 {
+		fmt.Fprintf(os.Stderr, "Warning: %s has permissive permissions (%04o). Recommended: chmod 0600 %s\n", path, info.Mode().Perm(), path)
+	}
 }

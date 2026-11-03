@@ -2,12 +2,13 @@
 
 BIN_DIR := bin
 BINARY := $(BIN_DIR)/lobectl
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 all: test build
 
 build:
 	@mkdir -p $(BIN_DIR)
-	go build -o $(BINARY) ./cmd/lobectl
+	go build -ldflags "-X main.version=$(VERSION)" -o $(BINARY) ./cmd/lobectl
 
 test:
 	go test -v ./...

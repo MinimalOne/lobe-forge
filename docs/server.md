@@ -128,7 +128,7 @@ LOBE_HUMAN_CLIENT_ID=<client id>
 Then verify pages using `lobectl` from your terminal:
 
 ```bash
-# Verify a page interactively (reviews in pager, pins content hash, prompts for approval)
+# Verify a page interactively (shows it in a pager, pins its content hash, asks on the terminal)
 lobectl verify <lobe> <slug>
 
 # Or view pages needing review (failing Check V)

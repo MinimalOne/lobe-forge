@@ -977,7 +977,7 @@ def call_mcp_tool(name: str, args: dict[str, Any]) -> Any:
     if name == "lobe_pending":
         return run_wiki_tool(args["lobe"], "pending")
     if name == "lobe_lint":
-        cmd = ["lint", *(["--strict"] if args.get("strict") else [])]
+        cmd = ["lint", *(["--strict"] if args.get("strict") else []), *(["--all"] if args.get("all") else [])]
         return run_wiki_tool(args["lobe"], *cmd)
     if name == "lobe_add_raw":
         return add_raw(args["lobe"], args["filename"], args["content"])
@@ -1337,7 +1337,7 @@ def dispatch_http(
                 ("GET", "search", 4): ("lobe_search", {"terms": query.get("q", []), "no_decay": flag("no_decay")}),
                 ("GET", "sections", 4): ("lobe_sections", {}),
                 ("GET", "pending", 4): ("lobe_pending", {}),
-                ("GET", "lint", 4): ("lobe_lint", {"strict": flag("strict")}),
+                ("GET", "lint", 4): ("lobe_lint", {"strict": flag("strict"), "all": flag("all")}),
                 ("GET", "links", 5): ("lobe_links", {"page": parts[-1]}),
                 ("POST", "raw", 4): ("lobe_add_raw", payload),
                 ("GET", "pages", 5): ("lobe_read_page", {

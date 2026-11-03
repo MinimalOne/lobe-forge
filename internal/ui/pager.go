@@ -8,12 +8,13 @@ import (
 	"strings"
 )
 
-// ViewInPager displays content using the system pager ($PAGER or less -R).
-// If no pager is found or stdin/stdout are not connected to a terminal, prints to stdout.
+// ViewInPager displays untrusted content, control characters stripped, in $PAGER (default: less).
+// If the pager cannot be started, it prints to stdout.
 func ViewInPager(content string) error {
+	content = StripControl(content)
 	pagerCmd := os.Getenv("PAGER")
 	if pagerCmd == "" {
-		pagerCmd = "less -R"
+		pagerCmd = "less"
 	}
 
 	parts := strings.Fields(pagerCmd)

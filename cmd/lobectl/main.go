@@ -12,19 +12,19 @@ import (
 	"github.com/MinimalOne/lobe-forge/internal/ui"
 )
 
-const version = "1.0.0"
+// version is set at build time: go build -ldflags "-X main.version=v2.5.3"
+var version = "dev"
 
 func printUsage() {
-	fmt.Printf(`lobectl — operator CLI for lobe-server and human verification (v%s)
+	fmt.Fprintf(os.Stderr, `lobectl — operator CLI for lobe-server and human verification (%s)
 
 Usage:
-  lobectl [global flags] <command> [arguments...]
+  lobectl <command> [arguments...] [flags]
 
 Verification Commands:
-  lobectl verify [review] <lobe> <slug>      Interactive review and verification with pager
+  lobectl verify [review] <lobe> <slug>      Read the page in a pager, then confirm on the terminal
   lobectl verify status <lobe> <slug>        Inspect page verification metadata and hashes
   lobectl verify list <lobe>                 List pages changed since human review (Check V)
-  lobectl verify stamp <lobe> <slug...>      Directly stamp page verification (--yes to skip confirm)
 
 Management Commands:
   lobectl list                               List all lobes on the server
@@ -33,185 +33,135 @@ Management Commands:
   lobectl export <lobe> [--out <dir>]        Download Google OKF v0.2 bundle to disk
   lobectl version                            Show lobectl version
 
-Global Flags:
+Flags (accepted anywhere on the command line):
   --url string      lobe-server URL (default: $LOBE_SERVER_URL or https://lobes.minimal.one)
   --token string    Human verification token (default: $LOBE_HUMAN_TOKEN or ~/.config/lobe/human.token)
   --by string       Human reviewer identity (default: $LOBE_USER or current user)
   --json            Output responses in raw JSON format
+  --strict          lint: strict mode
+  --out string      export: output directory (default: <lobe>-okf-export)
   -h, --help        Show this help message
 `, version)
 }
 
+type options struct {
+	url, token, by, out string
+	json, strict        bool
+}
+
+// parseArgs parses flags wherever they appear; Go's flag package alone stops at the first positional.
+func parseArgs(args []string) (options, []string, error) {
+	var o options
+	fs := flag.NewFlagSet("lobectl", flag.ContinueOnError)
+	fs.Usage = printUsage
+	fs.StringVar(&o.url, "url", "", "")
+	fs.StringVar(&o.token, "token", "", "")
+	fs.StringVar(&o.by, "by", "", "")
+	fs.StringVar(&o.out, "out", "", "")
+	fs.BoolVar(&o.json, "json", false, "")
+	fs.BoolVar(&o.strict, "strict", false, "")
+
+	var pos []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return o, nil, err
+		}
+		if fs.NArg() == 0 {
+			return o, pos, nil
+		}
+		pos = append(pos, fs.Arg(0))
+		args = fs.Args()[1:]
+	}
+}
+
+func fail(err error) {
+	fmt.Fprintf(os.Stderr, "%s\n", ui.Red("Error: "+err.Error()))
+	os.Exit(1)
+}
+
+func usage(line string) {
+	fmt.Fprintln(os.Stderr, "Usage: "+line)
+	os.Exit(1)
+}
+
 func main() {
-	if len(os.Args) < 2 {
-		printUsage()
+	o, args, err := parseArgs(os.Args[1:])
+	if err == flag.ErrHelp {
 		os.Exit(0)
 	}
-
-	// Parse global flags
-	fs := flag.NewFlagSet("lobectl", flag.ExitOnError)
-	var (
-		flagURL      string
-		flagToken    string
-		flagReviewer string
-		flagJSON     bool
-		flagHelp     bool
-	)
-
-	fs.StringVar(&flagURL, "url", "", "lobe-server base URL")
-	fs.StringVar(&flagToken, "token", "", "Human verification token")
-	fs.StringVar(&flagReviewer, "by", "", "Human reviewer identity")
-	fs.BoolVar(&flagJSON, "json", false, "Output raw JSON")
-	fs.BoolVar(&flagHelp, "help", false, "Show help")
-	fs.BoolVar(&flagHelp, "h", false, "Show help")
-
-	// Parse flags that appear before subcommand
-	if err := fs.Parse(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	args := fs.Args()
-	if flagHelp || len(args) == 0 {
-		printUsage()
-		os.Exit(0)
-	}
-
-	cmd := args[0]
-	cmdArgs := args[1:]
-
-	if cmd == "version" {
-		fmt.Printf("lobectl v%s\n", version)
-		os.Exit(0)
-	}
-
-	// Resolve configuration
-	cfg, err := config.Resolve(flagURL, flagToken, flagReviewer)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error resolving config: %v\n", err)
-		os.Exit(1)
+		os.Exit(1) // flag package already printed the error
+	}
+	if len(args) == 0 {
+		printUsage()
+		os.Exit(0)
 	}
 
+	cmd, cmdArgs := args[0], args[1:]
+	if cmd == "version" {
+		fmt.Printf("lobectl %s\n", version)
+		return
+	}
+
+	cfg, err := config.Resolve(o.url, o.token, o.by)
+	if err != nil {
+		fail(fmt.Errorf("resolving config: %w", err))
+	}
+	client.UserAgent = "lobectl/" + version
 	cli := client.New(cfg.ServerURL, cfg.HumanToken)
 	ctx := context.Background()
 
 	switch cmd {
 	case "verify":
-		handleVerify(ctx, cli, cfg, cmdArgs, flagJSON)
+		err = runVerify(ctx, cli, cfg, cmdArgs, o.json)
 	case "list":
-		if err := commands.RunList(ctx, cli, flagJSON); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		err = commands.RunList(ctx, cli, o.json)
 	case "lint":
-		handleLint(ctx, cli, cmdArgs, flagJSON)
+		if len(cmdArgs) != 1 {
+			usage("lobectl lint <lobe> [--strict]")
+		}
+		err = commands.RunLint(ctx, cli, cmdArgs[0], o.strict, o.json)
 	case "sync":
-		if len(cmdArgs) < 1 {
-			fmt.Fprintln(os.Stderr, "Usage: lobectl sync <lobe>")
-			os.Exit(1)
+		if len(cmdArgs) != 1 {
+			usage("lobectl sync <lobe>")
 		}
-		if err := commands.RunSync(ctx, cli, cmdArgs[0], flagJSON); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		err = commands.RunSync(ctx, cli, cmdArgs[0], o.json)
 	case "export":
-		handleExport(ctx, cli, cmdArgs, flagJSON)
+		if len(cmdArgs) != 1 {
+			usage("lobectl export <lobe> [--out <dir>]")
+		}
+		err = commands.RunExport(ctx, cli, cmdArgs[0], o.out, o.json)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmd)
 		printUsage()
 		os.Exit(1)
 	}
+	if err != nil {
+		fail(err)
+	}
 }
 
-func handleVerify(ctx context.Context, cli *client.Client, cfg *config.Config, args []string, jsonOutput bool) {
+func runVerify(ctx context.Context, cli *client.Client, cfg *config.Config, args []string, jsonOutput bool) error {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: lobectl verify <subcommand|lobe> [args...]")
-		fmt.Fprintln(os.Stderr, "Subcommands: review (default), status, list, stamp")
-		os.Exit(1)
+		usage("lobectl verify [review|status|list] <lobe> [slug]")
 	}
-
-	sub := args[0]
-	switch sub {
+	switch args[0] {
 	case "status":
-		if len(args) < 3 {
-			fmt.Fprintln(os.Stderr, "Usage: lobectl verify status <lobe> <slug>")
-			os.Exit(1)
+		if len(args) != 3 {
+			usage("lobectl verify status <lobe> <slug>")
 		}
-		if err := commands.RunVerifyStatus(ctx, cli, args[1], args[2], jsonOutput); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		return commands.RunVerifyStatus(ctx, cli, args[1], args[2], jsonOutput)
 	case "list":
-		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "Usage: lobectl verify list <lobe>")
-			os.Exit(1)
+		if len(args) != 2 {
+			usage("lobectl verify list <lobe>")
 		}
-		if err := commands.RunVerifyList(ctx, cli, args[1], jsonOutput); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-	case "stamp":
-		fs := flag.NewFlagSet("stamp", flag.ExitOnError)
-		yes := fs.Bool("yes", false, "Skip confirmation")
-		_ = fs.Parse(args[1:])
-		stampArgs := fs.Args()
-		if len(stampArgs) < 2 {
-			fmt.Fprintln(os.Stderr, "Usage: lobectl verify stamp <lobe> <slug...> [--yes]")
-			os.Exit(1)
-		}
-		if err := commands.RunVerifyStamp(ctx, cli, cfg, stampArgs[0], stampArgs[1:], *yes, jsonOutput); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		return commands.RunVerifyList(ctx, cli, args[1], jsonOutput)
 	case "review":
-		if len(args) < 3 {
-			fmt.Fprintln(os.Stderr, "Usage: lobectl verify review <lobe> <slug>")
-			os.Exit(1)
-		}
-		if err := commands.RunVerifyReview(ctx, cli, cfg, args[1], args[2], jsonOutput); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-	default:
-		// Default shortcut: 'lobectl verify <lobe> <slug>' -> interactive review
-		if len(args) >= 2 {
-			if err := commands.RunVerifyReview(ctx, cli, cfg, args[0], args[1], jsonOutput); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			return
-		}
-		fmt.Fprintf(os.Stderr, "Unknown verify subcommand or missing argument: %s\n", sub)
-		os.Exit(1)
+		args = args[1:]
 	}
-}
-
-func handleLint(ctx context.Context, cli *client.Client, args []string, jsonOutput bool) {
-	fs := flag.NewFlagSet("lint", flag.ExitOnError)
-	strict := fs.Bool("strict", false, "Strict lint mode")
-	_ = fs.Parse(args)
-	lintArgs := fs.Args()
-	if len(lintArgs) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: lobectl lint <lobe> [--strict]")
-		os.Exit(1)
+	// 'lobectl verify <lobe> <slug>' is shorthand for 'verify review'
+	if len(args) != 2 {
+		usage("lobectl verify [review] <lobe> <slug>")
 	}
-	if err := commands.RunLint(ctx, cli, lintArgs[0], *strict, jsonOutput); err != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", ui.Red(err.Error()))
-		os.Exit(1)
-	}
-}
-
-func handleExport(ctx context.Context, cli *client.Client, args []string, jsonOutput bool) {
-	fs := flag.NewFlagSet("export", flag.ExitOnError)
-	outDir := fs.String("out", "", "Output directory")
-	_ = fs.Parse(args)
-	exportArgs := fs.Args()
-	if len(exportArgs) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: lobectl export <lobe> [--out <dir>]")
-		os.Exit(1)
-	}
-	if err := commands.RunExport(ctx, cli, exportArgs[0], *outDir, jsonOutput); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	return commands.RunVerifyReview(ctx, cli, cfg, args[0], args[1], jsonOutput)
 }

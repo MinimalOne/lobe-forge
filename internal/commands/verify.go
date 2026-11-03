@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -67,6 +68,16 @@ func RunVerifyReview(ctx context.Context, cli *client.Client, cfg *config.Config
 		})
 	}
 
+	// The confirmation is read from the controlling terminal, never stdin, so `yes | lobectl ...` cannot answer it.
+	// shortcut: anything that can drive a pty as this user (expect, script) still can; only a credential kept off
+	// this machine (the browser verify page, per-reviewer OAuth) keeps agents out entirely.
+	tty, err := os.Open("/dev/tty")
+	if err != nil {
+		return fmt.Errorf("verification needs an interactive terminal: %w", err)
+	}
+	defer tty.Close()
+	answers := bufio.NewReader(tty)
+
 	for {
 		fmt.Println()
 		fmt.Printf("=== Reviewing %s / %s ===\n", ui.Cyan(lobe), ui.Cyan(slug))
@@ -86,7 +97,7 @@ func RunVerifyReview(ctx context.Context, cli *client.Client, cfg *config.Config
 		prompt := fmt.Sprintf("\nVerify %s/%s (hash: %s) as human:%s? [y/N/v(iew)/q(uit)]: ",
 			lobe, slug, st.Hash, cfg.Reviewer)
 
-		choice, err := ui.AskConfirmation(os.Stdin, prompt)
+		choice, err := ui.AskConfirmation(answers, prompt)
 		if err != nil {
 			return err
 		}
@@ -112,92 +123,55 @@ func RunVerifyReview(ctx context.Context, cli *client.Client, cfg *config.Config
 	}
 }
 
-// RunVerifyStamp performs direct (non-interactive) verification stamping.
-func RunVerifyStamp(ctx context.Context, cli *client.Client, cfg *config.Config, lobe string, slugs []string, yes, jsonOutput bool) error {
-	results := make([]*client.VerifyResult, 0, len(slugs))
-
-	for _, slug := range slugs {
-		st, err := cli.GetVerifyStatus(ctx, lobe, slug)
-		if err != nil {
-			return fmt.Errorf("%s: %w", slug, err)
-		}
-
-		if !yes {
-			prompt := fmt.Sprintf("Verify %s/%s (hash: %s) as human:%s? [y/N]: ",
-				lobe, slug, st.Hash, cfg.Reviewer)
-			choice, err := ui.AskConfirmation(os.Stdin, prompt)
-			if err != nil {
-				return err
-			}
-			if choice != "y" {
-				fmt.Printf("Skipping %s\n", slug)
-				continue
-			}
-		}
-
-		res, err := cli.VerifyPage(ctx, lobe, slug, st.Hash, cfg.Reviewer)
-		if err != nil {
-			return fmt.Errorf("%s: verification failed: %w", slug, err)
-		}
-		results = append(results, res)
-		if !jsonOutput {
-			fmt.Printf("%s Verified %s/%s (sha: %s, commit: %s, pushed: %v)\n",
-				ui.BadgeVerified(), lobe, slug, res.Verified.Sha, res.Commit, res.Pushed)
-		}
-	}
-
-	if jsonOutput {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(results)
-	}
-	return nil
-}
-
 // StaleVerificationItem represents a page flagged as stale or unverified.
 type StaleVerificationItem struct {
-	Slug        string `json:"slug"`
-	Issue       string `json:"issue"`
-	Details     string `json:"details"`
-	OldSha      string `json:"old_sha,omitempty"`
-	CurrentSha  string `json:"current_sha,omitempty"`
-	ReviewedBy  string `json:"reviewed_by,omitempty"`
+	Slug       string `json:"slug"`
+	Issue      string `json:"issue"`
+	Details    string `json:"details"`
+	OldSha     string `json:"old_sha,omitempty"`
+	CurrentSha string `json:"current_sha,omitempty"`
+	ReviewedBy string `json:"reviewed_by,omitempty"`
 }
 
 var staleRegex = regexp.MustCompile(`(?i)^\s*\d+\.\s+([A-Za-z0-9_-]+)\.md\s+—\s+content changed since review by ([^ ]+) on ([^ ]+) \(sha ([a-f0-9]+) != ([a-f0-9]+)\)`)
 
-// RunVerifyList checks for stale-verified pages (Lint Check V) and reports them.
-func RunVerifyList(ctx context.Context, cli *client.Client, lobe string, jsonOutput bool) error {
-	lint, err := cli.GetLint(ctx, lobe, true)
-	if err != nil {
-		return fmt.Errorf("lint %s: %w", lobe, err)
-	}
-
+// parseStaleV pulls the Check V items out of `wikictl lint` output.
+// shortcut: parses human-readable text; a structured server endpoint is the upgrade if the lint wording changes.
+func parseStaleV(stdout string) []StaleVerificationItem {
 	var items []StaleVerificationItem
-	lines := strings.Split(lint.Stdout, "\n")
 	inCheckV := false
-
-	for _, line := range lines {
+	for _, line := range strings.Split(stdout, "\n") {
 		if strings.HasPrefix(line, "V. Stale verification") {
 			inCheckV = true
 			continue
 		}
-		if inCheckV && len(line) > 0 && line[0] >= 'A' && line[0] <= 'Z' && !strings.HasPrefix(line, "V.") {
+		if inCheckV && len(line) > 0 && line[0] >= 'A' && line[0] <= 'Z' {
 			inCheckV = false
 		}
-		if inCheckV {
-			if matches := staleRegex.FindStringSubmatch(line); len(matches) == 6 {
-				items = append(items, StaleVerificationItem{
-					Slug:       matches[1],
-					Issue:      "STALE (changed since review)",
-					ReviewedBy: matches[2],
-					OldSha:     matches[4],
-					CurrentSha: matches[5],
-					Details:    fmt.Sprintf("reviewed by %s on %s", matches[2], matches[3]),
-				})
-			}
+		if !inCheckV {
+			continue
+		}
+		if m := staleRegex.FindStringSubmatch(line); len(m) == 6 {
+			items = append(items, StaleVerificationItem{
+				Slug:       m[1],
+				Issue:      "STALE (changed since review)",
+				ReviewedBy: m[2],
+				OldSha:     m[4],
+				CurrentSha: m[5],
+				Details:    fmt.Sprintf("reviewed by %s on %s", m[2], m[3]),
+			})
 		}
 	}
+	return items
+}
+
+// RunVerifyList reports pages whose content changed since a human verified them (Lint Check V).
+func RunVerifyList(ctx context.Context, cli *client.Client, lobe string, jsonOutput bool) error {
+	lint, err := cli.GetLint(ctx, lobe, true, true)
+	if err != nil {
+		return fmt.Errorf("lint %s: %w", lobe, err)
+	}
+	items := parseStaleV(lint.Stdout)
 
 	if jsonOutput {
 		enc := json.NewEncoder(os.Stdout)

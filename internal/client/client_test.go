@@ -169,7 +169,7 @@ func TestGetPageAndLint(t *testing.T) {
 		t.Errorf("unexpected content: %s", page.Content)
 	}
 
-	lint, err := cli.GetLint(context.Background(), "hack", true)
+	lint, err := cli.GetLint(context.Background(), "hack", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}

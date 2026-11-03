@@ -8,9 +8,13 @@ import (
 )
 
 // AskConfirmation prompts the user for verification action.
-// Returns "y" (yes), "n" (no), "v" (view), "q" (quit).
+// Returns "y" (yes), "n" (no), "v" (view), "q" (quit). Pass the same *bufio.Reader across
+// calls so input buffered by one call is not lost to the next.
 func AskConfirmation(r io.Reader, prompt string) (string, error) {
-	reader := bufio.NewReader(r)
+	reader, ok := r.(*bufio.Reader)
+	if !ok {
+		reader = bufio.NewReader(r)
+	}
 	for {
 		fmt.Print(prompt)
 		line, err := reader.ReadString('\n')

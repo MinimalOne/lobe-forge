@@ -161,15 +161,12 @@ def _parse_fm_block(fm_text: str) -> dict:
 
 def parse_frontmatter(text: str) -> tuple[dict | None, str]:
     """Return (frontmatter_dict, body) or (None, full_text) when absent."""
-    if not text.startswith("---\n"):
+    # body_start(): the same boundary the trust-field stripper uses, or fields past a `---\r\n` slip through
+    lines = text.splitlines(keepends=True)
+    start = body_start(lines)
+    if not start:
         return None, text
-    try:
-        end = text.index("\n---\n", 4)
-    except ValueError:
-        return None, text
-    fm = _parse_fm_block(text[4:end])
-    body = text[end + 5:]
-    return fm, body
+    return _parse_fm_block("".join(lines[1:start - 1])), "".join(lines[start:])
 
 
 TRUST_KEYS = ("generated", "verified")
@@ -178,7 +175,7 @@ ACTOR_RE = re.compile(r"^[\w.@:-]{1,64}$")
 
 def _fm_key(line: str) -> str | None:
     """Top-level key of a frontmatter line, read the way _parse_fm_block reads it (`key :`, `'key':`)."""
-    if ":" not in line or line.startswith((" ", "\t", "#")):
+    if ":" not in line or line.startswith((" ", "#")):  # not "\t": the parser reads `\tverified:` as a key
         return None
     return line.split(":", 1)[0].strip().strip("'\"")
 

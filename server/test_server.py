@@ -1021,6 +1021,20 @@ Old note.
         except ValueError:
             pass
         assert (wiki / "k8s-1.md").read_text() == "short\n"
+        # ...but an existing dotted page can be edited and rewritten, by MCP and REST, without touching k8s-1
+        app.git(wiki.parent, "add", "-A")
+        app.git(wiki.parent, "commit", "-qm", "test: dotted page")
+        res = app.call_mcp_tool("lobe_edit_page", {"lobe": "edits", "slug": "k8s-1.29-upgrade",
+                                                   "edits": [{"op": "find_replace", "find": "Configured", "content": "Set up"}]})
+        assert res["slug"] == "k8s-1.29-upgrade" and res["created"] is False, res
+        text = (wiki / "k8s-1.29-upgrade.md").read_text()
+        assert "Set up" in text and "--force" in text, text
+        status, body = app.dispatch_http("PUT", "/api/lobes/edits/pages/k8s-1.29-upgrade",
+                                         json.dumps({"content": text.replace("Set up", "Configured")}).encode())
+        assert status == 200 and body["created"] is False, body
+        assert "Configured" in (wiki / "k8s-1.29-upgrade.md").read_text()
+        assert (wiki / "k8s-1.md").read_text() == "short\n"
+        assert not (wiki / "k8s-1.v2.md").exists()
 
         # Terms and page names starting with "-" are searched for, not parsed as wikictl options
         res = app.call_mcp_tool("lobe_search", {"lobe": "edits", "terms": ["--force"]})

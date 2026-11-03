@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FORGE_SCRIPT = ROOT / "scripts" / "forge.py"
 PLUGIN_JSON = ROOT / ".claude-plugin" / "plugin.json"
 SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")  # page slugs; lobe names use forge.NAME_RE
-# existing pages may carry dots (k8s-1.29): verify accepts them, while new pages still need SLUG_RE
+# existing pages may carry dots (k8s-1.29): verify, write and edit accept them; new pages still need SLUG_RE
 PAGE_NAME_RE = re.compile(r"^[a-z0-9]+([.-][a-z0-9]+)*$")
 # ThreadingHTTPServer runs requests in parallel; one lock keeps page check-then-write and git commits atomic.
 _WRITE_LOCK = threading.RLock()
@@ -552,11 +552,12 @@ def write_page(
     actor: str | None = None,
 ) -> dict[str, Any]:
     clean_slug = page_name(slug)
-    if not SLUG_RE.match(clean_slug):
-        raise ValueError(f"Invalid page slug: {slug!r} (expected lowercase letters, digits, hyphens)")
     paths = l_paths(lobe)
     page_file = paths["WIKI"] / f"{clean_slug}.md"
     is_new = not page_file.exists()
+    # a new page needs a plain slug; an existing dotted page (k8s-1.29) can still be updated and edited
+    if not (SLUG_RE if is_new else PAGE_NAME_RE).match(clean_slug):
+        raise ValueError(f"Invalid page slug: {slug!r} (expected lowercase letters, digits, hyphens)")
     disk_text = None if is_new else page_file.read_text(encoding="utf-8")
     check_sha(disk_text, expected_sha)
 

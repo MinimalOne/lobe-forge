@@ -68,10 +68,10 @@ func RunVerifyReview(ctx context.Context, cli *client.Client, cfg *config.Config
 		})
 	}
 
-	// The confirmation is read from the controlling terminal, never stdin, so `yes | lobectl ...` cannot answer it.
-	// shortcut: anything that can drive a pty as this user (expect, script) still can; only a credential kept off
+	// The page, the prompt and the answer all go through the controlling terminal, never stdin/stdout:
+	// piped input cannot answer, and redirected stdout cannot hide the page from the reviewer., 	// shortcut: anything that can drive a pty as this user (expect, script) still can; only a credential kept off
 	// this machine (the browser verify page, per-reviewer OAuth) keeps agents out entirely.
-	tty, err := os.Open("/dev/tty")
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("verification needs an interactive terminal: %w", err)
 	}
@@ -79,25 +79,25 @@ func RunVerifyReview(ctx context.Context, cli *client.Client, cfg *config.Config
 	answers := bufio.NewReader(tty)
 
 	for {
-		fmt.Println()
-		fmt.Printf("=== Reviewing %s / %s ===\n", ui.Cyan(lobe), ui.Cyan(slug))
+		fmt.Fprintln(tty)
+		fmt.Fprintf(tty, "=== Reviewing %s / %s ===\n", ui.Cyan(lobe), ui.Cyan(slug))
 		if !st.IsVerified {
-			fmt.Printf("Status: %s\n", ui.BadgeUnverified())
+			fmt.Fprintf(tty, "Status: %s\n", ui.BadgeUnverified())
 		} else if st.IsStale {
-			fmt.Printf("Status: %s (reviewed sha: %s != current: %s)\n", ui.BadgeStale(), st.Verified.Sha, st.Hash)
+			fmt.Fprintf(tty, "Status: %s (reviewed sha: %s != current: %s)\n", ui.BadgeStale(), st.Verified.Sha, st.Hash)
 		} else {
-			fmt.Printf("Status: %s (reviewed by %s at %s)\n", ui.BadgeVerified(), st.Verified.By, st.Verified.At)
+			fmt.Fprintf(tty, "Status: %s (reviewed by %s at %s)\n", ui.BadgeVerified(), st.Verified.By, st.Verified.At)
 		}
-		fmt.Printf("Content Hash: %s (%d lines)\n\n", ui.Bold(st.Hash), page.Lines)
+		fmt.Fprintf(tty, "Content Hash: %s (%d lines)\n\n", ui.Bold(st.Hash), page.Lines)
 
-		if err := ui.ViewInPager(page.Content); err != nil {
+		if err := ui.ViewInPager(page.Content, tty); err != nil {
 			fmt.Fprintf(os.Stderr, "pager warning: %v\n", err)
 		}
 
 		prompt := fmt.Sprintf("\nVerify %s/%s (hash: %s) as human:%s? [y/N/v(iew)/q(uit)]: ",
 			lobe, slug, st.Hash, cfg.Reviewer)
 
-		choice, err := ui.AskConfirmation(answers, prompt)
+		choice, err := ui.AskConfirmation(answers, tty, prompt)
 		if err != nil {
 			return err
 		}
@@ -133,7 +133,7 @@ type StaleVerificationItem struct {
 	ReviewedBy string `json:"reviewed_by,omitempty"`
 }
 
-var staleRegex = regexp.MustCompile(`(?i)^\s*\d+\.\s+([A-Za-z0-9_-]+)\.md\s+—\s+content changed since review by ([^ ]+) on ([^ ]+) \(sha ([a-f0-9]+) != ([a-f0-9]+)\)`)
+var staleRegex = regexp.MustCompile(`(?i)^\s*\d+\.\s+(\S+?)\.md\s+—\s+content changed since review by ([^ ]+) on ([^ ]+) \(sha ([a-f0-9]+) != ([a-f0-9]+)\)`)
 
 // parseStaleV pulls the Check V items out of `wikictl lint` output.
 // shortcut: parses human-readable text; a structured server endpoint is the upgrade if the lint wording changes.

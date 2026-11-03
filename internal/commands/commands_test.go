@@ -20,12 +20,13 @@ B. Orphan pages (no inbound links) (1)
 V. Stale verification (content changed since human review) (2)  [warning — not blocking]
   2. alpha.md — content changed since review by human:jo on 2026-11-02T20:55:01Z (sha 1111 != 2222)
   3. beta-two.md — content changed since review by human:al on 2026-11-01T10:00:00Z (sha aaaa != bbbb)
+  4. k8s-1.29.md — content changed since review by human:al on 2026-11-01T10:00:00Z (sha cccc != dddd)
 
 T. Page types (missing or invalid type) (1)
-  4. gamma.md — content changed since review by human:x on y (sha 1 != 2)
+  5. gamma.md — content changed since review by human:x on y (sha 1 != 2)
 `
 	items := parseStaleV(out)
-	if len(items) != 2 || items[0].Slug != "alpha" || items[1].Slug != "beta-two" ||
+	if len(items) != 3 || items[0].Slug != "alpha" || items[1].Slug != "beta-two" || items[2].Slug != "k8s-1.29" ||
 		items[0].OldSha != "1111" || items[1].CurrentSha != "bbbb" || items[1].ReviewedBy != "human:al" {
 		t.Fatalf("unexpected items: %+v", items)
 	}
@@ -45,8 +46,8 @@ func TestRunExportRejectsUnsafePaths(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%q: expected error", bad)
 		}
-		if _, err := os.Stat(filepath.Join(out, "wiki", "ok.md")); err == nil {
-			t.Fatalf("%q: wrote files before rejecting the bundle", bad)
+		if _, err := os.Stat(out); err == nil {
+			t.Fatalf("%q: created the output directory before rejecting the bundle", bad)
 		}
 	}
 }

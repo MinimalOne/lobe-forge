@@ -1337,6 +1337,7 @@ def dispatch_http(
                 ("GET", "search", 4): ("lobe_search", {"terms": query.get("q", []), "no_decay": flag("no_decay")}),
                 ("GET", "sections", 4): ("lobe_sections", {}),
                 ("GET", "pending", 4): ("lobe_pending", {}),
+                # `all` is REST-only, like export-okf: it also lists every missing source, which would fill an agent's context
                 ("GET", "lint", 4): ("lobe_lint", {"strict": flag("strict"), "all": flag("all")}),
                 ("GET", "links", 5): ("lobe_links", {"page": parts[-1]}),
                 ("POST", "raw", 4): ("lobe_add_raw", payload),

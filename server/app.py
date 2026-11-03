@@ -35,13 +35,33 @@ SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")  # page slugs; lobe names use 
 PAGE_NAME_RE = re.compile(r"^[a-z0-9]+([.-][a-z0-9]+)*$")
 # ThreadingHTTPServer runs requests in parallel; one lock keeps page check-then-write and git commits atomic.
 _WRITE_LOCK = threading.RLock()
+# Pushes run after _WRITE_LOCK is released, so a slow remote cannot hold every lobe's writes;
+# one push (or sync) at a time per repo keeps an older push from landing after a newer one.
+_PUSH_LOCKS: dict[str, threading.Lock] = {}
+_PENDING = threading.local()  # .pushes: repos the outermost serialized call pushes on its way out
+
+
+def push_lock(repo: Path) -> threading.Lock:
+    return _PUSH_LOCKS.setdefault(str(repo), threading.Lock())
 
 
 def serialized(fn):
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        with _WRITE_LOCK:
-            return fn(*args, **kwargs)
+        outer = not hasattr(_PENDING, "pushes")
+        if outer:
+            _PENDING.pushes = []
+        out = None
+        try:
+            with _WRITE_LOCK:
+                out = fn(*args, **kwargs)
+        finally:
+            if outer:  # push even when fn failed after its commit, as the in-lock push did
+                for repo in dict.fromkeys(_PENDING.__dict__.pop("pushes")):
+                    res = push_origin(repo)
+                    if isinstance(out, dict) and "pushed" in out:
+                        out.update(res)
+        return out
     return wrapper
 
 if str(ROOT / "scripts") not in sys.path:
@@ -229,23 +249,22 @@ def git_commit_and_optional_push(repo: Path, message: str, paths: list[str] | No
     remote_url = has_remote(repo)
     should_push = bool(remote_url and autopush_enabled(repo))
 
-    pushed = False
-    push_error = None
+    push = {"pushed": False, "push_error": None}
     if should_push:
-        branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "main"
-        pr = git(repo, "push", "-u", "origin", branch, check=False)
-        if pr.returncode == 0:
-            pushed = True
+        if hasattr(_PENDING, "pushes"):
+            _PENDING.pushes.append(repo)  # serialized() pushes once the write lock is released
         else:
-            push_error = (pr.stderr or pr.stdout).strip()
+            push = push_origin(repo)
 
-    return {
-        "committed": committed,
-        "commit": commit_hash,
-        "remote": remote_url,
-        "pushed": pushed,
-        "push_error": push_error,
-    }
+    return {"committed": committed, "commit": commit_hash, "remote": remote_url, **push}
+
+
+def push_origin(repo: Path) -> dict[str, Any]:
+    with push_lock(repo):
+        branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip() or "main"
+        # no -u: it writes .git/config, which a configure_remote under the write lock may hold
+        r = git(repo, "push", "origin", branch, check=False)
+    return {"pushed": r.returncode == 0, "push_error": None if r.returncode == 0 else (r.stderr or r.stdout).strip()}
 
 
 def list_lobes() -> list[dict[str, Any]]:
@@ -388,25 +407,27 @@ def sync_lobe(lobe: str, push: bool = True) -> dict[str, Any]:
     if not remote_url:
         raise ValueError(f"Lobe {lobe!r} has no remote repository configured")
 
-    remote_has_commits = verify_remote_access(remote_url)
-    branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "main"
+    # a rebase under an outside-lock push would push commits that are about to be rewritten
+    with push_lock(repo):
+        remote_has_commits = verify_remote_access(remote_url)
+        branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "main"
 
-    pulled = False
-    if remote_has_commits:
-        ls_branch = git(repo, "ls-remote", "--heads", "origin", branch, check=False)
-        if ls_branch.returncode == 0 and ls_branch.stdout.strip():
-            pr = git(repo, "pull", "--rebase", "origin", branch, check=False)
-            if pr.returncode != 0:
-                git(repo, "rebase", "--abort", check=False)
-                raise RuntimeError(f"Git pull --rebase conflict/error (rebase aborted): {(pr.stderr or pr.stdout).strip()}")
-            pulled = True
+        pulled = False
+        if remote_has_commits:
+            ls_branch = git(repo, "ls-remote", "--heads", "origin", branch, check=False)
+            if ls_branch.returncode == 0 and ls_branch.stdout.strip():
+                pr = git(repo, "pull", "--rebase", "origin", branch, check=False)
+                if pr.returncode != 0:
+                    git(repo, "rebase", "--abort", check=False)
+                    raise RuntimeError(f"Git pull --rebase conflict/error (rebase aborted): {(pr.stderr or pr.stdout).strip()}")
+                pulled = True
 
-    pushed = False
-    if push:
-        push_r = git(repo, "push", "-u", "origin", branch, check=False)
-        if push_r.returncode != 0:
-            raise RuntimeError(f"Git push failed: {(push_r.stderr or push_r.stdout).strip()}")
-        pushed = True
+        pushed = False
+        if push:
+            push_r = git(repo, "push", "-u", "origin", branch, check=False)
+            if push_r.returncode != 0:
+                raise RuntimeError(f"Git push failed: {(push_r.stderr or push_r.stdout).strip()}")
+            pushed = True
 
     head = git(repo, "rev-parse", "--short", "HEAD", check=False)
     commit_hash = head.stdout.strip() if head.returncode == 0 else None
@@ -417,6 +438,9 @@ def sync_lobe(lobe: str, push: bool = True) -> dict[str, Any]:
         "pushed": pushed,
         "commit": commit_hash,
     }
+
+
+WIKI_TOOL_TIMEOUT = 30  # seconds; search compiles caller terms as regexes
 
 
 def run_wiki_tool(lobe: str, *args: str) -> dict[str, Any]:
@@ -430,8 +454,12 @@ def run_wiki_tool(lobe: str, *args: str) -> dict[str, Any]:
         "WIKI_RAW_DIR": str(paths["RAW"].relative_to(paths["REPO"])),
         "WIKI_CATALOG": str(paths["LOBE"] / "catalog.jsonl"),
     }
-    r = subprocess.run([sys.executable, str(ROOT / "templates" / "wiki_tool.py"), *args],
-                       capture_output=True, text=True, env=env)
+    try:
+        r = subprocess.run([sys.executable, str(ROOT / "templates" / "wiki_tool.py"), *args],
+                           capture_output=True, text=True, env=env, timeout=WIKI_TOOL_TIMEOUT)
+    except subprocess.TimeoutExpired:  # run() has already killed it
+        raise RuntimeError(f"wiki_tool {args[0] if args else ''} timed out after {WIKI_TOOL_TIMEOUT}s; "
+                           "a search term that is a regex can backtrack without end, e.g. (a+)+$") from None
     return {
         "returncode": r.returncode,
         "stdout": r.stdout,
@@ -1148,11 +1176,6 @@ def introspect_token_info(token: str) -> dict[str, Any] | None:
     return info
 
 
-def introspect_token(token: str) -> bool:
-    """Validate an OAuth access token with the issuer's RFC 7662 introspection endpoint."""
-    return introspect_token_info(token) is not None
-
-
 def check_auth(auth_header: str | None) -> bool:
     expected = os.environ.get("LOBE_API_TOKEN", "").strip()
     human = os.environ.get("LOBE_HUMAN_TOKEN", "").strip()
@@ -1165,7 +1188,7 @@ def check_auth(auth_header: str | None) -> bool:
         return True
     if human and hmac.compare_digest(token.encode(), human.encode()):
         return True
-    return bool(oauth_issuer()) and introspect_token(token)
+    return bool(oauth_issuer()) and introspect_token_info(token) is not None
 
 
 def check_human_auth(auth_header: str | None) -> tuple[bool, str | None]:

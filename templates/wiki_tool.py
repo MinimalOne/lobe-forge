@@ -52,6 +52,16 @@ INDEX   = WIKI / "index.md"
 SKIP    = {"index.md", "log.md"}
 
 
+def write_atomic(path: Path, text: str) -> None:
+    """Write a temp file, then swap it in: a kill or an encode error mid-write leaves the old file whole."""
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 # ── Parsing ───────────────────────────────────────────────────────────────────
 
 def _unquote(val: str) -> str:
@@ -1212,7 +1222,7 @@ def cmd_index_add(args) -> int:
         lines.insert(rows[-1] + 1, row)
     else:
         lines[start + 1:start + 1] = ["", "| Page | Description |", "|---|---|", row]
-    INDEX.write_text("\n".join(lines) + "\n")
+    write_atomic(INDEX, "\n".join(lines) + "\n")
     print(f"Added [[{page}]] to '{heads[[i for i, _ in heads].index(start)][1]}'")
     return 0
 
@@ -1247,13 +1257,13 @@ def cmd_rotate_log(args) -> int:
     for ym, entries in sorted(moved.items()):
         f = LOG_ARCHIVE / f"{ym}.md"
         old = f.read_text() if f.exists() else f"# {title} — {ym}\n\n"
-        f.write_text(old.rstrip("\n") + "\n\n" + "".join(entries).strip("\n") + "\n")
+        write_atomic(f, old.rstrip("\n") + "\n\n" + "".join(entries).strip("\n") + "\n")
         print(f"{WIKI.name}/log/{ym}.md: {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}")
     pointer = f"Older entries: `{WIKI.name}/log/<YYYY-MM>.md`, one file per month.\n"
     if pointer not in header:
         header = header.rstrip("\n") + "\n\n" + pointer
     body = "".join(keep).strip("\n")
-    log.write_text(header.rstrip("\n") + ("\n\n" + body + "\n" if body else "\n"))
+    write_atomic(log, header.rstrip("\n") + ("\n\n" + body + "\n" if body else "\n"))
     return 0
 
 
@@ -1347,7 +1357,7 @@ def cmd_set_atoms(args) -> int:
     if not inserted:
         cleaned.extend(atoms_block)
 
-    path.write_text("---\n" + "\n".join(cleaned) + "\n---\n" + body)
+    write_atomic(path, "---\n" + "\n".join(cleaned) + "\n---\n" + body)
     print(f"Set {len(atoms_block) - 1} atom(s) on {path.name}")
     return 0
 
@@ -1367,7 +1377,7 @@ def cmd_stamp(args) -> int:
             print(f"{path.name}: {e}", file=sys.stderr)
             rc = 1
             continue
-        path.write_text(spliced, encoding="utf-8")
+        write_atomic(path, spliced)
         print(f"Stamped {path.name} (by: {args.by})")
     return rc
 
@@ -1400,7 +1410,7 @@ def cmd_verify(args) -> int:
             print(f"{path.name}: {e}", file=sys.stderr)
             rc = 1
             continue
-        path.write_text(spliced, encoding="utf-8")
+        write_atomic(path, spliced)
         print(f"Verified {path.name} (by: {by}, sha: {h})")
     return rc
 
@@ -1441,7 +1451,7 @@ def cmd_convert_legacy(args) -> int:
             continue
         print(f"  {'wrote' if args.apply else 'would convert'} {p.name}: {info}")
         if args.apply:
-            p.write_text(new)
+            write_atomic(p, new)
         done += 1
     verb = "Converted" if args.apply else "Dry run — would convert"
     print(f"\n{verb} {done} page(s); {skipped} skipped (fix by hand).")
@@ -1488,7 +1498,7 @@ def cmd_set_type(args) -> int:
             rc = 1
             continue
         if new_text != text:
-            path.write_text(new_text, encoding="utf-8")
+            write_atomic(path, new_text)
             print(f"Set {path.name} type: {target_type}")
         else:
             print(f"Kept {path.name} type: {target_type}")

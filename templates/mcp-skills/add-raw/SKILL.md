@@ -44,8 +44,7 @@ Call the **`lobe_add_raw`** MCP tool on `lobe-server`:
 {
   "lobe": "{{NAME}}",
   "filename": "<YYYY-MM-DD-slug.md>",
-  "content": "<full markdown content>",
-  "message": "raw: add <YYYY-MM-DD-slug.md>"
+  "content": "<full markdown content>"
 }
 ```
 

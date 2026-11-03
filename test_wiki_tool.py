@@ -335,6 +335,20 @@ def test_source_count_missing_means_listed():
     assert parse_page(Path("p.md"), two.replace("sources:", "source_count: 1\nsources:"))["source_count"] == 1
 
 
+def test_write_atomic_keeps_old_file_on_failure():
+    import tempfile
+    from wiki_tool import write_atomic
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "page.md"
+        write_atomic(p, "old\n")
+        try:
+            write_atomic(p, "new \ud800\n")  # a lone surrogate fails while encoding, after any truncation
+            raise AssertionError("unencodable text written")
+        except UnicodeEncodeError:
+            pass
+        assert p.read_text() == "old\n" and [f.name for f in Path(d).iterdir()] == ["page.md"]
+
+
 def test_cmd_stamp():
     import argparse
     import tempfile
@@ -926,6 +940,7 @@ if __name__ == "__main__":
     test_strip_trust_fields()
     test_parser_empty_key_and_flat_flow()
     test_source_count_missing_means_listed()
+    test_write_atomic_keeps_old_file_on_failure()
     test_cmd_stamp()
     test_page_hash()
     test_set_verified_field()

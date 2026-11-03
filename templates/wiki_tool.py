@@ -54,7 +54,7 @@ SKIP    = {"index.md", "log.md"}
 
 def write_atomic(path: Path, text: str) -> None:
     """Write a temp file, then swap it in: a kill or an encode error mid-write leaves the old file whole."""
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f".{path.name}.tmp")  # dot name: lobe_pending skips a leftover after a kill
     try:
         tmp.write_text(text, encoding="utf-8")
         os.replace(tmp, path)

@@ -51,7 +51,7 @@ Configured [[pi5-setup]] from raw notes (source: 2026-10-30-pi5-notes.md).
 
 
 def test_part1_core_and_git_scenarios() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         tmp_path = Path(tmp)
         lobes_dir = tmp_path / "lobes"
         os.environ["LOBES_DIR"] = str(lobes_dir)
@@ -326,7 +326,7 @@ def http_req(
 
 
 def test_part2_http_rest_and_mcp_e2e() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         tmp_path = Path(tmp)
         lobes_dir = tmp_path / "lobes"
         os.environ["LOBES_DIR"] = str(lobes_dir)
@@ -728,7 +728,7 @@ def test_part3_container_isolation_and_compose() -> None:
     assert app.server_version() == expected_ver
 
     # Simulate exact Dockerfile layout in an isolated temp root (/app) and run MCP stdio E2E
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         app_root = Path(tmp) / "app"
         lobes_dir = Path(tmp) / "data" / "lobes"
         (app_root / ".claude-plugin").mkdir(parents=True)
@@ -830,7 +830,7 @@ def test_part4_oauth_resource_server() -> None:
     app.introspection_endpoint.cache_clear()
     app._TOKEN_CACHE.clear()
     try:
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             os.environ["LOBES_DIR"] = tmp
             code, meta = http_req(base_url, "GET", "/.well-known/oauth-protected-resource/mcp")
             assert code == 200
@@ -878,7 +878,7 @@ Flash the EEPROM.
 
 Old note.
 """
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         os.environ["LOBES_DIR"] = str(Path(tmp) / "lobes")
         os.environ.pop("LOBE_GIT_PUSH", None)
         app.create_lobe("edits", "Edit tests")
@@ -1199,7 +1199,7 @@ Some text in beta.
 
 
 def test_part7_server_owned_trust_fields() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         os.environ["LOBES_DIR"] = str(Path(tmp) / "lobes")
         os.environ.pop("LOBE_GIT_PUSH", None)
         app.create_lobe("trust", "Trust tests")
@@ -1307,7 +1307,7 @@ def test_part8_verification_channel_and_auth() -> None:
     mock_idp_url = f"http://127.0.0.1:{mock_idp.server_address[1]}"
     threading.Thread(target=mock_idp.serve_forever, daemon=True).start()
 
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         os.environ["LOBES_DIR"] = tmp
         os.environ["LOBE_API_TOKEN"] = "agent-secret-token"
         os.environ["LOBE_HUMAN_TOKEN"] = "human-secret-token"
@@ -1524,7 +1524,7 @@ def test_part8_verification_channel_and_auth() -> None:
 
 
 def test_part9_page_types_and_lifecycle() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         os.environ["LOBES_DIR"] = tmp
         os.environ.pop("LOBE_API_TOKEN", None)
         os.environ.pop("LOBE_HUMAN_TOKEN", None)
@@ -1576,7 +1576,7 @@ def test_part9_page_types_and_lifecycle() -> None:
 
 def test_part10_export_okf() -> None:
     """Test Part 10: OKF v0.2 bundle export via the REST endpoint (no MCP tool)."""
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
         token = "test-export-token-12345"
         os.environ["LOBES_DIR"] = tmp_dir
         os.environ["LOBE_API_TOKEN"] = token

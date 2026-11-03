@@ -1,10 +1,12 @@
 # How it works
 
-lobe-forge gives your AI tools a shared, long-term memory: a second brain made of wikis that the AI writes and you own.
+lobe-forge gives your AI tools a shared, long-term memory: a second brain made of wikis that the AI writes and you own. New to the terms? See [Words you'll see](../README.md#words-youll-see).
 
 ## A lobe is a Git repository
 
 The idea comes from Karpathy's "LLM wiki" pattern. You add sources, and the assistant compiles them into a wiki that it keeps consistent: summaries, links between pages, an index, and a log. You read and steer it; the assistant does the writing and bookkeeping.
+
+A lobe is one folder:
 
 ```text
 raw/            Sources you added (append-only: never edited or deleted)
@@ -15,9 +17,11 @@ LOBE.md         Page format and rules the assistant follows
 skills/         <name>-add-raw, <name>-ingest, <name>-ask, <name>-lint
 ```
 
-Pages are plain Markdown with YAML frontmatter (title, type, summary, aliases, atoms, sources, last updated) and `[[wiki-links]]`. Atoms are one-line facts, commands, fixes, and decisions, so search can answer from them directly. Search ranks a match in a page's name, title, aliases, atoms, or summary above a match in the body text, and slightly prefers recently updated pages. Every change is a Git commit, so you can review, revert, or push it like any other repository.
+Pages are plain Markdown. A small block of fields at the top of each page (YAML frontmatter) holds its title, type, summary, aliases, atoms, sources and last-updated date, and `[[wiki-links]]` link pages to each other. Atoms are one-line facts, commands, fixes, and decisions, so search can answer from them directly. Search ranks a match in a page's name, title, aliases, atoms, or summary above a match in the body text, and slightly prefers recently updated pages. Every change is a Git commit, so you can review, revert, or push it like any other repository.
 
 ## Trust: who wrote a page, and did a person check it
+
+In short: the AI can write pages, but only a person can mark a page as checked, and that check lapses as soon as the page changes.
 
 An AI wrote most of your wiki, so every page answers two questions in its frontmatter:
 
@@ -48,7 +52,7 @@ The clock runs from the latest of `last_updated`, the last edit, and the last hu
 
 ## Lint: keeping the wiki healthy
 
-`wikictl lint` (or `lobe_lint`) checks every page. Broken `[[links]]`, frontmatter errors and missing source files are errors that block `--strict`; everything else is a warning:
+Lint is a health check you can run at any time; the `<name>-lint` skill or a request like *"check my homelab lobe"* runs it for you. `wikictl lint` (or `lobe_lint`) checks every page. Broken `[[links]]`, frontmatter errors and missing source files are errors that block `--strict`; everything else is a warning:
 
 - orphan pages, index drift, missing atoms, long pages, likely duplicates;
 - missing or invalid page types (T), pages past their staleness date (S), and pages changed since their last human review (V).
@@ -84,6 +88,8 @@ REMOTE
 Every way in reaches the same `lobe_*` operations (search, read, write, lint), so a lobe written by one tool can be read by any other.
 
 ## Git: commit always, push optionally
+
+Every change is saved in the lobe's history. Copying that history to GitHub or another Git host (pushing) is your choice, and is what gives you an off-machine backup.
 
 - **Local lobes**: every ingest creates a commit. Push when you want.
 - **lobe-server**: every write (`lobe_add_raw`, `lobe_write_page`, `lobe_edit_page`) commits on the server. Writes run one at a time, so parallel clients never collide on Git. It pushes to `origin` only when the lobe has a remote and auto-push is on. `lobe_sync` fetches, rebases (`git pull --rebase`), and pushes. On a rebase conflict it aborts cleanly and returns `409 Conflict`.

@@ -1,6 +1,10 @@
 # Reference
 
+Look-up tables for lobe-server settings, MCP tools, REST endpoints and the `lobectl` command-line tool. For step-by-step setup, start with [server.md](server.md) or [local.md](local.md).
+
 ## Environment variables
+
+lobe-server reads its settings from environment variables, for example from the `env_file` in [server.md](server.md#1-start-the-server).
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
@@ -92,12 +96,14 @@ curl -s -X POST https://lobes.example.com/api/lobes/homelab/sync \
 
 ## `lobectl` Operator CLI
 
-`lobectl` is a standalone Go binary for human verification and remote lobe management.
+`lobectl` is a standalone Go binary for the person who runs lobe-server: verify pages, and list, lint, sync and export remote lobes from a terminal.
 
 ### Installation
 
+Needs Go 1.22 or newer.
+
 ```bash
-make install # installs to ~/.local/bin/lobectl
+make install # from a clone of this repository; installs to ~/.local/bin/lobectl
 # or:
 go install github.com/MinimalOne/lobe-forge/cmd/lobectl@latest
 ```

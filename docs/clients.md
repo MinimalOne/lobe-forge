@@ -13,6 +13,8 @@ The examples connect to a self-hosted `lobe-server` at `https://lobes.example.co
 
 ## Authentication
 
+Every tool must prove it may use your lobes. There are two ways:
+
 - **Static token**: the tool sends `Authorization: Bearer <LOBE_API_TOKEN>` with every request. Works for every tool on this page except Claude.ai and the Claude mobile app.
 - **OAuth**: the tool signs you in through your identity provider. Needed for Claude.ai and the Claude mobile app. Set it up on the server first: [server.md, step 4](server.md#4-enable-oauth-for-claudeai-and-the-claude-mobile-app-optional).
 
